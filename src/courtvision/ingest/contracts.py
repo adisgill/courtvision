@@ -119,6 +119,27 @@ def load_bbref(con, path: Path) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def load_current(con, raw: pd.DataFrame, season: int) -> pd.DataFrame:
+    """Today's team contract pages with NBA ``team_id`` and matched ``person_id``."""
+    if raw.empty:
+        return raw
+    names = _team_ids(con)
+    raw = raw.copy()
+    raw["team_id"] = raw.team_abbr.map(lambda a: names.get(norm_team(BBREF_TEAMS[a])))
+    players = con.execute(
+        "select person_id, trim(coalesce(first_name, '') || ' ' || last_name) as name "
+        "from stg.players"
+    ).df()
+    played = con.execute(
+        "select distinct season, person_id, team_id from metrics.player_season_counts "
+        "where team_id <> 0"
+    ).df()
+    ids = raw.drop_duplicates("bbref_id")[["bbref_id", "player", "team_id"]].copy()
+    ids["season_year"], ids["nba_team_id"] = season, ids.team_id
+    ids["person_id"] = match_players(ids, players, played)
+    return raw.merge(ids[["bbref_id", "person_id"]], on="bbref_id", how="left")
+
+
 def read_overrides(path: Path, con) -> pd.DataFrame:
     """Your corrections: player, season, salary[, team][, option]. Missing file: none."""
     if not path.exists():
@@ -140,8 +161,16 @@ def read_overrides(path: Path, con) -> pd.DataFrame:
     return o[["person_id", "season", "salary", "team_id", "option"]].dropna(subset=["person_id"])
 
 
-def build_book(con, bb: pd.DataFrame, season: int, overrides: pd.DataFrame) -> dict:
-    """``salary.book`` (player x season rows) and ``salary.contract_summary``."""
+def build_book(con, bb: pd.DataFrame, season: int, overrides: pd.DataFrame,
+               current: pd.DataFrame | None = None, current_as_of: str = "") -> dict:  # fmt: skip
+    """``salary.book`` (player x season rows) and ``salary.contract_summary``.
+
+    ``current``: Basketball-Reference's team contract pages fetched today
+    (:mod:`courtvision.ingest.bbref_contracts`, with ``person_id`` and ``team_id``). When
+    given, they decide every standard contract and its later years; the July snapshot then
+    only adds dead money and two-way deals (the pages list neither), and the June pages
+    are not needed. Overrides still win.
+    """
     snap = con.execute(
         """select person_id, player, team_id, salary, team_option, player_option, two_way,
                   terminated
@@ -168,6 +197,19 @@ def build_book(con, bb: pd.DataFrame, season: int, overrides: pd.DataFrame) -> d
                      "team_id": r.team_id, "option": None, "kind": "dead money",
                      "source": f"snapshot {SNAPSHOT_AS_OF}"})  # fmt: skip
     length_known = {}
+    use_current = current is not None and not current.empty
+    if use_current:
+        cur = current[current.person_id.notna() & (current.season >= season)]
+        for x in cur.itertuples():
+            rows.append({"person_id": int(x.person_id), "season": int(x.season),
+                         "salary": x.salary, "team_id": x.team_id, "option": x.option,
+                         "kind": "contract",
+                         "source": f"basketball-reference {current_as_of}"})  # fmt: skip
+            length_known[int(x.person_id)] = True
+        # the pages list standard contracts only: keep July's two-way deals
+        active_snap = active_snap[active_snap.two_way.astype(bool)
+                                  & ~active_snap.person_id.isin(set(length_known))]  # fmt: skip
+        bbs = {}  # the June pages are superseded
     for pid, g in active_snap.groupby("person_id"):
         r = g.sort_values("salary", ascending=False).iloc[0]
         opt = "player" if r.player_option else "team" if r.team_option else None
@@ -233,13 +275,17 @@ def build_book(con, bb: pd.DataFrame, season: int, overrides: pd.DataFrame) -> d
                                    "option": opt, "kind": "contract",
                                    "source": "rookie scale (inferred)"}  # fmt: skip
         length_known[pid] = True
-    # playing now with no contract anywhere: signed after the snapshots
+    # playing now with no contract anywhere: signed after the snapshots. With today's
+    # contract pages, which list every standard contract, that means a two-way or
+    # short-term (10-day) deal, which doesn't count against the cap.
     signed = set(book.person_id[book.kind.isin(["contract", "two-way"])])
+    why = ("not on the contract pages: two-way or short-term deal" if use_current
+           else "playing; no contract in the snapshots")  # fmt: skip
     for pid, team in team_now.items():
         if pid not in signed:
             book.loc[len(book)] = {"person_id": pid, "season": season, "salary": np.nan,
                                    "team_id": team, "option": None, "kind": "unknown",
-                                   "source": "playing; no contract in the snapshots"}  # fmt: skip
+                                   "source": why}  # fmt: skip
             length_known[pid] = False
     # your overrides replace whatever a source said for that player and season
     if not overrides.empty:
@@ -279,7 +325,9 @@ def summarize(con, book: pd.DataFrame, declined: set, season: int) -> pd.DataFra
         later = g[(g.season > season) & g.kind.isin(["contract", "two-way"])].sort_values("season")
         nxt = later[later.season == season + 1]
         if c.kind == "unknown":
-            status = "salary unknown (signed after the snapshots)"
+            status = ("two-way or short-term deal (salary not listed)"
+                      if "contract pages" in str(c.source)
+                      else "salary unknown (signed after the snapshots)")  # fmt: skip
         elif c.kind == "two-way" and later.empty:
             status = "two-way (restricted when it ends)"
         elif not bool(c.length_known):

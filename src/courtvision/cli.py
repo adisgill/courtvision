@@ -157,30 +157,53 @@ def metrics_build(
 @ingest_app.command("salaries")
 def ingest_salaries(
     download: bool = typer.Option(True, help="Download from Kaggle first (else use the cache)."),
+    fetch_current: bool = typer.Option(
+        False,
+        "--fetch-current",
+        help="Fetch today's Basketball-Reference team contract pages (30 requests, 4 s "
+        "apart; cached per day). Without it the newest cached pages are used.",
+    ),
 ) -> None:
     """Salaries, contracts, cap / tax / aprons -> salary.* (book, contract_summary, ...).
 
-    Sources: the July 2026 salary snapshot (Kaggle mrbridge), Basketball-Reference
-    contracts with future years and options (Kaggle deocheng, June 2026), and your own
-    ``data/salary_overrides.csv`` if it exists (player,season,salary,team,option).
-    """
-    from courtvision.db import connect
-    from courtvision.ingest import contracts, salaries
+    Sources, newest first: your ``data/salary_overrides.csv``; Basketball-Reference's
+    current team contract pages (``--fetch-current``, cached under
+    data/raw/salaries/bbref_current/<date>); the July 2026 salary snapshot (Kaggle
+    mrbridge: two-way deals, dead money, cap thresholds); Basketball-Reference contracts
+    of June 2026 (Kaggle deocheng; used only when no current pages are cached).
+    """  # fmt: skip
+    import logging
 
+    from courtvision.db import connect
+    from courtvision.ingest import bbref_contracts, contracts, salaries
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     data = get_paths().data
     raw = data / "raw" / "salaries" / "mrbridge"
     bb_dir = data / "raw" / "salaries" / "deocheng"
+    cur_root = data / "raw" / "salaries" / "bbref_current"
     if download or not raw.exists():
         salaries.download(raw)
     bb_path = next(iter(bb_dir.rglob("public.player_contracts.csv")), None)
     if download or bb_path is None:
         bb_path = contracts.download_bbref(bb_dir)
+    if fetch_current:
+        bbref_contracts.fetch_all(bbref_contracts.today_dir(cur_root),
+                                  list(contracts.BBREF_TEAMS))  # fmt: skip
+    cur_dir = bbref_contracts.latest_dir(cur_root)
     with connect() as con:
         stats = salaries.load(con, raw)["by_season"]
         season = con.execute("select max(season) from salary.contracts").fetchall()[0][0]
         bb = contracts.load_bbref(con, bb_path)
         over = contracts.read_overrides(data / "salary_overrides.csv", con)
-        res = contracts.build_book(con, bb, season, over)
+        current = (contracts.load_current(con, bbref_contracts.load_dir(cur_dir), season)
+                   if cur_dir else None)  # fmt: skip
+        if current is not None:
+            matched = current.drop_duplicates("bbref_id").person_id.notna().mean()
+            typer.echo(f"current contract pages {cur_dir.name}: {current.bbref_id.nunique()} "
+                       f"players, matched {matched:.1%}")  # fmt: skip
+        res = contracts.build_book(con, bb, season, over, current,
+                                   cur_dir.name if cur_dir else "")  # fmt: skip
         summary = contracts.summarize(con, res["book"], res["declined"], season)
         contracts.write(con, res["book"], summary)
         status = con.execute(

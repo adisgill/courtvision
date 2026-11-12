@@ -109,7 +109,11 @@ def match_players(sal: pd.DataFrame, players: pd.DataFrame, played: pd.DataFrame
 
     out = []
     for r in sal.itertuples():
-        cands = by_key.get(norm_name(r.player), [])
+        key = norm_name(r.player)
+        cands = by_key.get(key, [])
+        if not cands and " " in key:  # family name first ("Yang Hansen" / "Hansen Yang")
+            first, _, rest = key.partition(" ")
+            cands = by_key.get(f"{rest} {first}", [])
         if len(cands) > 1:
             narrowed = [c for c in cands if (r.season_year, c, r.nba_team_id) in roster] or [
                 c for c in cands if (r.season_year, c) in in_season
@@ -122,6 +126,9 @@ def match_players(sal: pd.DataFrame, players: pd.DataFrame, played: pd.DataFrame
                     > last_season.get(recent[1], 0)
                 ):
                     narrowed = recent[:1]
+            if not narrowed:  # duplicate ids for one man: the one who has played in the NBA
+                ever = [c for c in cands if c in last_season]
+                narrowed = ever if len(ever) == 1 else []
             cands = narrowed
         if not cands:
             hit = fuzzy(r)

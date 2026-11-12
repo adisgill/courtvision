@@ -122,9 +122,9 @@ def needs_tab(con, t: pd.Series, p: pd.Series, mode: str, team_label, goto) -> N
                     width="stretch", key="m_budget")  # fmt: skip
     note = f"**{t.status[:1].upper() + t.status[1:]}.** Lines: cap, tax, first and second apron."
     if t.unknown:
-        note += (f" {int(t.unknown)} player(s) on the roster signed after the salary "
-                 "snapshots, so their salaries are missing and payroll is understated; add "
-                 "them to `data/salary_overrides.csv`.")  # fmt: skip
+        note += (f" {int(t.unknown)} player(s) on the roster aren't on the standard-contract "
+                 "pages: two-way or short-term deals, which don't count against the cap. "
+                 "Correct anything in `data/salary_overrides.csv`.")  # fmt: skip
     st.caption(note)
 
     st.subheader("Where the team is short")
@@ -427,10 +427,14 @@ def render(con, team_label, theme: str, goto) -> None:
     p = D.q(con, "select * from market.params").iloc[0]
     season = int(p.season)
     teams = D.q(con, "select * from market.teams order by team_id")
+    src = D.q(con, "select max(source) as s from salary.book "
+              "where source like 'basketball-reference 20%'").s.iloc[0] or ""  # fmt: skip
+    as_of = src.replace("basketball-reference ", "")
     st.caption(
-        f"{_season(season)} salaries: Basketball-Reference contracts (June 2026) updated with "
-        "the HoopsHype snapshot of 2026-07-07, charged to the team each player plays for now; "
-        "your `data/salary_overrides.csv` wins over both. Fair salary = market comparables: "
+        f"{_season(season)} contracts: Basketball-Reference's team contract pages as of "
+        f"{as_of}, plus two-way deals and dead money from the HoopsHype snapshot of "
+        "2026-07-07; your `data/salary_overrides.csv` wins over both (refresh with "
+        "`courtvision ingest salaries --fetch-current`). Fair salary = market comparables: "
         "the Nth most valuable player (points above replacement, from per-possession impact) "
         "priced at the Nth-highest veteran salary, capped by his max for years of service. "
         f"{p.points_per_win:.0f} points = 1 win. Trade and tax rules are a simplified reading "

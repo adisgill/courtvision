@@ -155,3 +155,42 @@ def test_team_form_model_recovers_strength_and_opponent_effect():
     pred = predict_team(m, 0, 1, True)
     truth = 2 + form[0] + opp[1] + 1.5
     assert abs(pred - truth) < 1.0
+
+
+def test_bbref_contract_page_parser_reads_salaries_and_options():
+    from courtvision.ingest.bbref_contracts import parse
+
+    html = """<table id="contracts"><thead><tr>
+      <th data-stat="player">Player</th><th data-stat="age_today">Age</th>
+      <th aria-label="2026-27" data-stat="y1">2026-27</th>
+      <th aria-label="2027-28" data-stat="y2">2027-28</th>
+      <th aria-label="2028-29" data-stat="y3">2028-29</th>
+      <th data-stat="remain_gtd">Guaranteed</th></tr></thead><tbody>
+      <tr><th data-stat="player" csk="smithjo01"><a href="#">John Smith</a></th>
+        <td data-stat="age_today">27</td>
+        <td class="right " data-stat="y1" csk="20000000">$20,000,000</td>
+        <td class="right salary-pl" data-stat="y2" csk="21000000">$21,000,000</td>
+        <td class="right iz" data-stat="y3"></td>
+        <td data-stat="remain_gtd" csk="20000000">$20,000,000</td></tr>
+      <tr><th data-stat="player" csk="doeja01"><a href="#">Jane Doe</a></th>
+        <td data-stat="age_today">22</td>
+        <td class="right " data-stat="y1" csk="3000000">$3,000,000</td>
+        <td class="right salary-tm" data-stat="y2" csk="3200000">$3,200,000</td>
+        <td class="right " data-stat="y3"></td><td data-stat="remain_gtd" csk="3000000"></td>
+      </tr></tbody></table>"""
+    df = parse(html, "LAL")
+    assert len(df) == 4
+    smith = df[df.bbref_id == "smithjo01"].set_index("season")
+    assert smith.loc[2026, "salary"] == 20_000_000 and pd.isna(smith.loc[2026, "option"])
+    assert smith.loc[2027, "option"] == "player" and 2028 not in smith.index
+    assert df[(df.bbref_id == "doeja01") & (df.season == 2027)].option.iloc[0] == "team"
+    assert set(df.team_abbr) == {"LAL"}
+
+
+def test_match_players_reversed_names_and_duplicate_ids():
+    players = pd.DataFrame({"person_id": [1, 2, 3], "name": ["Hansen Yang", "Didi Louzada",
+                                                             "Didi Louzada"]})  # fmt: skip
+    played = pd.DataFrame({"season": [2020, 2026], "person_id": [2, 1], "team_id": [5, 6]})
+    sal = pd.DataFrame({"season_year": [2026, 2026], "nba_team_id": [6, 7],
+                        "player": ["Yang Hansen", "Didi Louzada"]})  # fmt: skip
+    assert match_players(sal, players, played).tolist() == [1, 2]

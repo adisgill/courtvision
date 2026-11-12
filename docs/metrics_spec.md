@@ -798,6 +798,17 @@ agent. Status next summer: UFA, RFA (rookie scale ending, or two-way), player / 
 option, under contract, or length unknown. Basketball-Reference names arrive
 double-encoded (UTF-8 read as Latin-1); `fix_mojibake` repairs them before matching.
 
+**Current pages (user-approved, 2026-11-12).** `courtvision ingest salaries
+--fetch-current` downloads Basketball-Reference's 30 team contract pages
+(`/contracts/<TEAM>.html`, allowed by robots.txt; 4 s apart against a 3 s crawl delay;
+cached per day under `data/raw/salaries/bbref_current/<date>/`;
+`courtvision.ingest.bbref_contracts`). When cached, they decide every standard contract
+and its later years and options (cell classes `salary-pl` / `salary-tm`); the July
+snapshot then adds only two-way deals and dead money, which the pages don't list, and
+the June table isn't used. Players playing now who are on no page are two-way or
+short-term deals. First pull: 455 players, all matched (reversed name order and duplicate
+ids handled); 63 unknown contracts fell to 32, all end-of-bench two-way or 10-day players.
+
 ### 13.2 Fair salary: market comparables by rank
 
 `value = (impact − R) × projected possessions / 200` (points above replacement). The

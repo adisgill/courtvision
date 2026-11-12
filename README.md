@@ -48,7 +48,10 @@ ratings, every expected player, the margin and the win chance.
 4. **Kaggle** — [`deocheng/nba-data-1946-2026`](https://www.kaggle.com/datasets/deocheng/nba-data-1946-2026)
    (Apache-2.0 on Kaggle; scraped from Basketball-Reference, 17–23 June 2026): only
    `public.player_contracts`, every contract's future years and options.
-5. **You** — optional `data/salary_overrides.csv` for deals signed after those snapshots
+5. **[Basketball-Reference](https://www.basketball-reference.com/contracts/)** team contract
+   pages, fetched on request (`courtvision ingest salaries --fetch-current`: 30 pages,
+   4 s apart, cached per day, kept on your machine): today's contracts, the newest source.
+6. **You** — optional `data/salary_overrides.csv` to correct or add any deal
    (format: [`docs/salary_overrides.example.csv`](docs/salary_overrides.example.csv)).
 
 No player-tracking data is used; none is public.
@@ -64,7 +67,7 @@ cp .env.example .env                              # then put your Kaggle API tok
 uv run courtvision ingest kaggle                  # download (~1.1 GB) + load (~1 min)
 uv run courtvision ingest nba-api --season 2025   # optional: ~1 h cold, for validation (T3, T6)
 uv run courtvision metrics build                  # every rating, all seasons (~9 min)
-uv run courtvision ingest salaries                # salaries, contracts, cap thresholds
+uv run courtvision ingest salaries --fetch-current  # salaries, contracts (today's), cap
 uv run courtvision market build                   # value, budgets, needs, options, free agency
 uv run courtvision forecast                       # each team's next game + backtest (seconds)
 uv run courtvision validate                       # regenerate docs/validation.md

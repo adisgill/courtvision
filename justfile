@@ -49,7 +49,7 @@ metrics:
 
 # salaries + cap thresholds, then the player market
 market:
-    uv run courtvision ingest salaries
+    uv run courtvision ingest salaries --fetch-current
     uv run courtvision market build
 
 # rebuild everything from the raw caches
