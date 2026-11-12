@@ -22,7 +22,7 @@ fmt:
     uv run ruff check --fix .
     uv run ruff format .
 
-# run the offline test suite
+# run the tests (integration tests skip until `just metrics` has run)
 test:
     uv run pytest
 
@@ -42,3 +42,23 @@ nba-api season:
 audit season="2025":
     uv run courtvision audit kaggle
     uv run courtvision audit nba-api --season {{season}}
+
+# build every rating (possessions, lineups, counts, baselines, ratings)
+metrics:
+    uv run courtvision metrics build
+
+# rebuild everything from the raw caches
+build:
+    uv run courtvision build
+
+# regenerate docs/validation.md
+validate:
+    uv run courtvision validate
+
+# open the visualizer
+app:
+    uv run courtvision app
+
+# rate a live game, e.g. `just live 0022600216`; no id lists today's games
+live game_id="":
+    uv run courtvision live {{ if game_id == "" { "" } else { "--game-id " + game_id } }}
