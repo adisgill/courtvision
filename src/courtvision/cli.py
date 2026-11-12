@@ -154,6 +154,44 @@ def metrics_build(
         typer.echo(f"{n:>12,}  ratings ({level})")
 
 
+@ingest_app.command("salaries")
+def ingest_salaries(
+    download: bool = typer.Option(True, help="Download from Kaggle first (else use the cache)."),
+) -> None:
+    """Salaries, payrolls, cap / tax / aprons (Kaggle: mrbridge) -> salary.* with NBA ids."""
+    from courtvision.db import connect
+    from courtvision.ingest import salaries
+
+    raw = get_paths().data / "raw" / "salaries" / "mrbridge"
+    if download or not raw.exists():
+        salaries.download(raw)
+    with connect() as con:
+        stats = salaries.load(con, raw)["by_season"]
+    typer.echo(stats.to_string(index=False))
+
+
+market_app = typer.Typer(help="Player market: value, budgets, needs, options.",
+                         no_args_is_help=True)  # fmt: skip
+app.add_typer(market_app, name="market")
+
+
+@market_app.command("build")
+def market_build(
+    season: int | None = typer.Option(None, help="Salary season; default the latest."),
+) -> None:
+    """Price every player, read every team's budget and needs, list the options."""
+    import logging
+
+    from courtvision import market
+    from courtvision.db import connect
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    with connect() as con:
+        params = market.build(con, season)
+    for k, v in params.items():
+        typer.echo(f"{k:>22}: {v:,.4g}" if isinstance(v, float) else f"{k:>22}: {v}")
+
+
 @app.command("app")
 def run_app(port: int = typer.Option(8501, help="Port for the Streamlit server.")) -> None:
     """Open the visualizer (Streamlit): team, game, player and live views."""
@@ -220,7 +258,8 @@ def validate() -> None:
 def build(
     workers: int | None = typer.Option(None, help="Parallel play-by-play workers."),
 ) -> None:
-    """Rebuild everything from the raw caches: kaggle-load -> nba-api load -> metrics."""
+    """Rebuild everything from the raw caches: kaggle-load -> nba-api load -> metrics ->
+    salaries -> market."""
     from courtvision.db import connect
     from courtvision.ingest import nba_api_pull
 
@@ -231,6 +270,11 @@ def build(
             nba_api_pull.load(con, paths.nba_api_raw, paths.parquet / "nba_api", s)
             typer.echo(f"nba_api {s} loaded from cache")
     metrics_build(season=[], skip_pbp=False, workers=workers)
+    if (paths.data / "raw" / "salaries" / "mrbridge").exists():
+        ingest_salaries(download=False)
+        market_build(season=None)
+    else:
+        typer.echo("no salary cache: run `courtvision ingest salaries` for the market model")
 
 
 def _cached_nba_api_seasons(cache_dir) -> list[int]:

@@ -47,6 +47,11 @@ audit season="2025":
 metrics:
     uv run courtvision metrics build
 
+# salaries + cap thresholds, then the player market
+market:
+    uv run courtvision ingest salaries
+    uv run courtvision market build
+
 # rebuild everything from the raw caches
 build:
     uv run courtvision build
