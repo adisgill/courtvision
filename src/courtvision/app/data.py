@@ -113,6 +113,63 @@ def impact(con, person_id: int) -> pd.DataFrame:
     )
 
 
+def team_map(con, season: int) -> pd.DataFrame:
+    """Offense and defense per 100 possessions vs league (box possessions, every era),
+    record, and net, per team for one regular season."""
+    return q(
+        con,
+        """with t as (
+               select team_id, sum(b_pts) pts, sum(o_b_pts) opp, sum(b_poss) poss,
+                      sum(o_b_poss) o_poss, count(*) filter (where b_pts > o_b_pts) wins,
+                      count(*) filter (where b_pts < o_b_pts) losses
+               from metrics.team_game_counts
+               where season = ? and season_type = 'regular' group by team_id
+           ), lg as (select sum(pts) / sum(poss) as ppp from t)
+           select t.team_id, t.wins, t.losses,
+                  100 * (t.pts / t.poss - lg.ppp) as offense,
+                  100 * (lg.ppp - t.opp / t.o_poss) as defense,
+                  100 * (t.pts / t.poss - t.opp / t.o_poss) as net
+           from t, lg order by net desc""",
+        [season],
+    )
+
+
+def team_dims(con, season: int, adjusted: bool) -> pd.DataFrame:
+    """Wide 0-100 ratings of the five team dimensions (best tier), raw or opponent-adjusted."""
+    col = "a.rating_adj" if adjusted else "a.rating"
+    long = q(
+        con,
+        f"""select a.team_id, a.measure, {col} as rating
+            from metrics.team_season_adj a
+            join metrics.best_tier b
+              on b.level = 'team_season' and b.season = a.season
+             and b.measure = a.measure and b.tier = a.tier
+            where a.season = ? and a.measure in
+                  ('shooting', 'defense', 'ball_control', 'backcourt', 'frontcourt')""",
+        [season],
+    )
+    if long.empty:
+        return long
+    return long.pivot_table(index="team_id", columns="measure", values="rating").reset_index()
+
+
+def impact_leaders(con, season: int) -> pd.DataFrame:
+    return q(
+        con,
+        """select i.person_id, i.impact, i.impact_off, i.impact_def, i.impact_se, i.poss,
+                  i.points_added, i.qualified, pos.w_bc, r.usage, r.minutes,
+                  trim(coalesce(p.first_name, '') || ' ' || p.last_name) as player
+           from metrics.player_impact i
+           join stg.players p using (person_id)
+           left join metrics.positions pos using (person_id)
+           left join metrics.player_role r
+             on r.person_id = i.person_id and r.season = i.season and r.team_id = 0
+            and r.season_type = 'regular'
+           where i.season = ?""",
+        [season],
+    )
+
+
 def has_market(con) -> bool:
     return bool(
         q(

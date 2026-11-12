@@ -77,3 +77,19 @@ def test_match_players_nicknames_and_spellings():
     names = ["Nicolas Claxton", "Herb Jones", "Dennis Schroeder"]
     sal = pd.DataFrame({"season_year": [2026] * 3, "nba_team_id": [9, 9, 9], "player": names})
     assert match_players(sal, players, played).tolist() == [1, 2, 3]
+
+
+def test_selected_point_reads_every_customdata_shape():
+    from types import SimpleNamespace
+
+    from courtvision.app.charts import selected
+
+    def ev(cd):
+        return SimpleNamespace(selection={"points": [{"customdata": cd}]})
+
+    assert selected(ev([1610612747])) == 1610612747
+    assert selected(ev({"0": "Nikola Jokic", "1": 7})) == "Nikola Jokic"
+    assert selected(ev({"0": "a", "1": 7}), 1) == 7
+    assert selected(ev("x")) == "x"
+    assert selected(SimpleNamespace(selection={"points": []})) is None
+    assert selected(None) is None

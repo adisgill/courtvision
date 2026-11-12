@@ -28,15 +28,15 @@ X_MIN, X_MAX, Y_MIN, Y_TOP = -250, 250, -47.5, 300
 FG_SCALE = 8.0  # percentage points of FG% at full color
 MIN_FGA = 15  # zones with fewer shots are drawn neutral and say so
 
-# Diverging pair (cold blue, neutral gray, hot red) and ink, per theme.
+# Diverging pair (blue = good for the unit, gray = average, red = bad) and ink, per theme.
 THEME = {
     "light": {
-        "cold": "#2a78d6", "mid": "#f0efec", "hot": "#e34948",
+        "good": "#2a78d6", "mid": "#f0efec", "bad": "#e34948",
         "ink": "#0b0b0b", "ink2": "#52514e", "muted": "#898781",
         "lines": "rgba(11,11,11,0.55)", "bar": "#a8a69e",
     },
     "dark": {
-        "cold": "#3987e5", "mid": "#383835", "hot": "#e66767",
+        "good": "#3987e5", "mid": "#383835", "bad": "#e66767",
         "ink": "#f0efec", "ink2": "#c3c2b7", "muted": "#898781",
         "lines": "rgba(240,239,236,0.55)", "bar": "#6b6a64",
     },
@@ -132,12 +132,12 @@ def _mix(a: str, b: str, t: float) -> str:
 
 
 def heat_color(diff_pp: float | None, mode: str) -> str:
-    """Diverging fill for an FG% difference in percentage points (gray when unknown)."""
+    """Diverging fill for a good-for-the-unit difference in points of % (gray if unknown)."""
     t = THEME[mode]
     if diff_pp is None or math.isnan(diff_pp):
         return t["mid"]
     s = max(-1.0, min(1.0, diff_pp / FG_SCALE))
-    return _mix(t["mid"], t["hot"] if s >= 0 else t["cold"], abs(s))
+    return _mix(t["mid"], t["good"] if s >= 0 else t["bad"], abs(s))
 
 
 def _text_on(fill: str) -> str:
@@ -155,7 +155,8 @@ _LABEL_AT = {"RA": (0, 24), "PAINT": (0, 112), "MID": (-150, 112), "ATB3": (0, 2
 
 
 def zone_court(prof: pd.DataFrame, mode: str = "light", allowed: bool = False) -> go.Figure:
-    """Each zone filled by FG% vs league (red hotter, blue colder) and labelled with it.
+    """Each zone filled by FG% vs league and labelled with it. Blue is good for the unit:
+    above-average shooting on offense, opponents below average on defense.
 
     ``prof`` is :func:`courtvision.app.data.zone_profile` output: one row per zone with
     ``fga``, ``unit_fg_pct``, ``fg_pct`` (league), ``unit_share``, ``share`` (league).
@@ -168,7 +169,7 @@ def zone_court(prof: pd.DataFrame, mode: str = "light", allowed: bool = False) -
         r = p.loc[zone] if zone in p.index else None
         enough = r is not None and r.fga >= MIN_FGA
         diff = 100 * (r.unit_fg_pct - r.fg_pct) if enough else None
-        fill = heat_color(diff, mode)
+        fill = heat_color(None if diff is None else (-diff if allowed else diff), mode)
         xs: list[float | None] = []
         ys: list[float | None] = []
         for poly in polys:

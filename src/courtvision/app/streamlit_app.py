@@ -1,7 +1,8 @@
 """courtvision visualizer: ``uv run courtvision app``.
 
-Team, game and player views over the built ratings, plus the live view. Everything is
-read from ``data/courtvision.duckdb`` (read-only); run ``courtvision metrics build`` first.
+League, team, game, player, market and live views over the built ratings. Every chart is
+interactive: hover for numbers, and click a team or a player to open its page. Read-only
+over ``data/courtvision.duckdb``; run ``courtvision build`` first.
 """
 
 from __future__ import annotations
@@ -11,10 +12,25 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+from courtvision.app import charts as C
 from courtvision.app import court
 from courtvision.app import data as D
 
 st.set_page_config(page_title="courtvision", layout="wide")
+
+# ---- navigation: a click sets the target view's widgets on the next run ------------------
+if "_goto" in st.session_state:
+    target = st.session_state.pop("_goto")
+    for k in target.pop("_clear", []):
+        st.session_state.pop(k, None)
+    for k, v in target.items():
+        st.session_state[k] = v
+
+
+def goto(view: str, clear: str | None = None, **keys) -> None:
+    """Open ``view`` with its widgets preset (e.g. t_team=..., p_name=...)."""
+    st.session_state["_goto"] = {"view": view, "_clear": [clear] if clear else [], **keys}
+    st.rerun()
 
 
 @st.cache_resource
@@ -49,28 +65,70 @@ def team_label(team_id: int, season: int) -> str:
     return row.team.iloc[0] if not row.empty else str(team_id)
 
 
-def rating_table(df: pd.DataFrame, measures: list[str]) -> pd.DataFrame:
-    """value / rating / tier rows for the given measures, in that order."""
-    d = df.set_index("measure")
-    rows = []
-    for m in measures:
-        if m in d.index:
-            r = d.loc[m]
-            rows.append(
-                {
-                    "measure": D.LABELS.get(m) or D.COMPONENT_LABELS.get(m, m),
-                    "pts / 100 vs league": round(float(r.value), 2),
-                    "rating": None if pd.isna(r.rating) else round(float(r.rating)),
-                    "tier": r.tier,
-                    "low sample": bool(r.low_sample),
-                }
-            )
-    return pd.DataFrame(rows)
+def short_team(team_id: int, season: int) -> str:
+    return team_label(team_id, season).split()[-1]
 
 
 def _theme() -> str:
     theme = getattr(st.context, "theme", None)
     return "dark" if theme is not None and theme.type == "dark" else "light"
+
+
+def _valid(key: str, options: list, default=None) -> None:
+    """Drop a preset widget value that isn't among this run's options."""
+    if key in st.session_state and st.session_state[key] not in options:
+        st.session_state.pop(key)
+        if default is not None:
+            st.session_state[key] = default
+
+
+def label_of(m: str) -> str:
+    return D.LABELS.get(m) or D.COMPONENT_LABELS.get(m, m)
+
+
+def rating_table(df: pd.DataFrame, measures: list[str]) -> pd.DataFrame:
+    d = df.set_index("measure")
+    rows = []
+    for m in measures:
+        if m in d.index:
+            r = d.loc[m]
+            rows.append({
+                "measure": label_of(m), "pts / 100 vs league": round(float(r.value), 2),
+                "rating": None if pd.isna(r.rating) else round(float(r.rating)),
+                "tier": r.tier, "low sample": bool(r.low_sample),
+            })  # fmt: skip
+    return pd.DataFrame(rows)
+
+
+def dimension_charts(r: pd.DataFrame, mode: str, key: str, adj: pd.DataFrame | None = None):
+    """Headline dimensions, then their components, as diverging bars (value; rating)."""
+    d = r.set_index("measure")
+    if adj is not None and not adj.empty:
+        d = d.assign(value=adj.value_adj.reindex(d.index).fillna(d.value),
+                     rating=adj.rating_adj.reindex(d.index).fillna(d.rating))  # fmt: skip
+    heads = [m for m in D.HEADLINE if m in d.index]
+    comps = [m for m in D.ordered(d.index) if m not in D.HEADLINE and m in D.COMPONENT_LABELS
+             and not m.startswith(("defense_stl", "defense_blk", "defense_pf", "ball_ato",
+                                   "ball_ast", "ball_shot"))]  # fmt: skip
+    t1, t2 = st.tabs(["Dimensions", "What drives them"])
+    with t1:
+        st.plotly_chart(
+            C.diverging_bars([label_of(m) for m in heads], [d.value.get(m) for m in heads],
+                             mode, "points per 100 vs league",
+                             ratings=[d.rating.get(m) for m in heads]),
+            width="stretch", key=f"dims_{key}",
+        )  # fmt: skip
+    with t2:
+        st.plotly_chart(
+            C.diverging_bars([label_of(m) for m in comps], [d.value.get(m) for m in comps],
+                             mode, "points per 100 vs league",
+                             ratings=[d.rating.get(m) for m in comps]),
+            width="stretch", key=f"comps_{key}",
+        )  # fmt: skip
+    st.caption("Bar: points per 100 vs league average (blue helps, red hurts). Number after "
+               "the dot: the 0-100 rating.")  # fmt: skip
+    with st.expander("Table"):
+        st.dataframe(rating_table(r, D.ordered(r.measure)), hide_index=True)
 
 
 def zone_charts(prof: pd.DataFrame, who: str, allowed: bool = False, key: str = "") -> None:
@@ -87,8 +145,8 @@ def zone_charts(prof: pd.DataFrame, who: str, allowed: bool = False, key: str = 
                         key=f"court_{key}")  # fmt: skip
         st.caption(
             "Each zone shows FG% and, below it, the gap to league average that season in "
-            "percentage points. Red: made more than average from there; blue: fewer."
-            + (" For a defense, blue is good." if allowed else "")
+            "percentage points. Blue is good for "
+            + ("this defense (opponents shot worse)." if allowed else f"{who}; red is bad.")
         )
     with c2:
         st.markdown(f"**Where {'opponents' if allowed else who} shot from**, share of shots")
@@ -110,88 +168,176 @@ def zone_charts(prof: pd.DataFrame, who: str, allowed: bool = False, key: str = 
             )
     with st.expander("Zone table"):
         t = prof.set_index("zone").reindex(court.ZONES).reset_index()
-        st.dataframe(
-            pd.DataFrame(
-                {
-                    "zone": t.zone.map(court.ZONE_LABELS),
-                    "shots": t.fga.astype(int),
-                    "share": (100 * t.unit_share).round(1),
-                    "league share": (100 * t.share).round(1),
-                    "FG%": (100 * t.unit_fg_pct).round(1),
-                    "league FG%": (100 * t.fg_pct).round(1),
-                    "pts/100 shots from selection": t.selection_pp100.round(2),
-                    "pts/100 shots from making": t.making_pp100.round(2),
-                }
-            ),
-            hide_index=True,
-        )
+        st.dataframe(pd.DataFrame({
+            "zone": t.zone.map(court.ZONE_LABELS), "shots": t.fga.astype(int),
+            "share": (100 * t.unit_share).round(1), "league share": (100 * t.share).round(1),
+            "FG%": (100 * t.unit_fg_pct).round(1), "league FG%": (100 * t.fg_pct).round(1),
+            "pts/100 shots from selection": t.selection_pp100.round(2),
+            "pts/100 shots from making": t.making_pp100.round(2),
+        }), hide_index=True)  # fmt: skip
+
+
+def trend_chart(g: pd.DataFrame, mode: str, title: str) -> go.Figure:
+    g = g.sort_values("game_date")
+    g["rolling"] = g.groupby("measure").rating.transform(
+        lambda s: s.rolling(10, min_periods=3).mean()
+    )
+    g["dimension"] = g.measure.map(D.LABELS)
+    fig = px.line(g, x="game_date", y="rolling", color="dimension",
+                  labels={"rolling": title, "game_date": ""},
+                  color_discrete_sequence=["#2a78d6", "#eb6834", "#1baf7a", "#e87ba4",
+                                           "#6250d6"])  # fmt: skip
+    fig.add_hline(y=50, line_color=C.THEME[mode]["muted"], line_width=1)
+    C.base_layout(fig, 320, legend={"orientation": "h", "y": -0.2, "title": ""})
+    return fig
 
 
 # ---- views --------------------------------------------------------------------------------
 
 
+def league_view() -> None:
+    con, mode = _con(), _theme()
+    c1, c2 = st.columns([1, 3])
+    season = c1.selectbox("Season", _seasons(), format_func=season_label, key="l_season")
+    tm = D.team_map(con, season)
+    if tm.empty:
+        st.warning("No games this season.")
+        return
+    tm["name"] = [short_team(t, season) for t in tm.team_id]
+    left, right = st.columns([3, 2], gap="large")
+    with left:
+        st.subheader("Team map")
+        top = max(tm.offense.abs().max(), tm.defense.abs().max()) * 1.2
+        fig = go.Figure()
+        for c in range(-24, 25, 4):  # lines of equal net rating
+            fig.add_trace(go.Scatter(x=[-top, top], y=[c + top, c - top], mode="lines",
+                                     line={"color": C.THEME[mode]["grid"], "width": 1},
+                                     hoverinfo="skip", showlegend=False))  # fmt: skip
+        fig.add_trace(go.Scatter(
+            x=tm.offense, y=tm.defense, mode="markers+text", text=tm.name,
+            textposition="top center", textfont={"size": 11, "color": C.THEME[mode]["ink2"]},
+            marker={"size": 13, "color": [C.good_bad(v, 10, mode) for v in tm.net],
+                    "line": {"width": 1, "color": C.THEME[mode]["muted"]}},
+            customdata=tm[["team_id"]].to_numpy(),
+            hovertemplate="%{text}<br>offense %{x:+.1f}, defense %{y:+.1f} per 100"
+                          "<extra></extra>", showlegend=False,
+        ))  # fmt: skip
+        fig.add_hline(y=0, line_color=C.THEME[mode]["muted"], line_width=1)
+        fig.add_vline(x=0, line_color=C.THEME[mode]["muted"], line_width=1)
+        C.base_layout(fig, 520, xaxis={"title": "offense: points per 100 vs league",
+                                       "range": [-top, top], "zeroline": False},
+                      yaxis={"title": "defense: points per 100 saved vs league",
+                             "range": [-top, top], "zeroline": False})  # fmt: skip
+        ev = st.plotly_chart(fig, width="stretch", on_select="rerun",
+                             selection_mode="points", key="l_map")  # fmt: skip
+        st.caption("Top right is good at both ends; diagonal lines are equal net rating. "
+                   "**Click a team** to open it.")  # fmt: skip
+        if (pick := C.selected(ev)) is not None:
+            goto("Team", clear="l_map", t_season=season, t_team=int(pick))
+    with right:
+        st.subheader("Five dimensions")
+        adjusted = st.toggle("Adjust for opponents", value=True, key="l_adj")
+        dims = D.team_dims(con, season, adjusted)
+        if not dims.empty:
+            dims = dims.merge(tm[["team_id", "net", "name"]], on="team_id")
+            dims = dims.sort_values("net", ascending=False)
+            cols = [c for c in D.HEADLINE if c in dims.columns]
+            st.plotly_chart(C.rating_heatmap(dims, "name", cols, [D.LABELS[c] for c in cols],
+                                             mode), width="stretch", key="l_heat")  # fmt: skip
+            st.caption("0-100 ratings (50 = league average), teams by net rating.")
+
+    st.subheader("Impact per possession: leaders")
+    lead = D.impact_leaders(con, season)
+    if lead.empty:
+        st.info("Per-possession impact needs play-by-play lineups (1996-97 on).")
+    else:
+        f1, f2 = st.columns([2, 1])
+        group = f1.segmented_control("Position", ["All", "Backcourt", "Frontcourt"],
+                                     default="All", key="l_pos")  # fmt: skip
+        side = f2.segmented_control("Side", ["Total", "Offense", "Defense"], default="Total",
+                                    key="l_side")  # fmt: skip
+        col = {"Total": "impact", "Offense": "impact_off", "Defense": "impact_def"}[side]
+        q = lead[lead.qualified]
+        if group == "Backcourt":
+            q = q[q.w_bc.fillna(0) >= 0.5]
+        elif group == "Frontcourt":
+            q = q[q.w_bc.fillna(0) < 0.5]
+        q = q.sort_values(col, ascending=False).head(20)
+        fig = go.Figure(go.Bar(
+            y=q.player, x=q[col], orientation="h", marker_color=C.THEME[mode]["good"],
+            marker_cornerradius=4,
+            error_x={"type": "data", "array": q.impact_se if col == "impact" else None,
+                     "color": C.THEME[mode]["muted"], "thickness": 1, "width": 3},
+            customdata=q[["player"]].to_numpy(),
+            hovertemplate="%{y}: %{x:+.1f} per 100<extra></extra>",
+        ))  # fmt: skip
+        C.base_layout(fig, 560, yaxis={"autorange": "reversed"},
+                      xaxis={"title": "points per 100 possessions vs league"})  # fmt: skip
+        ev = st.plotly_chart(fig, width="stretch", on_select="rerun", selection_mode="points",
+                             key="l_lead")  # fmt: skip
+        st.caption("Adjusted plus-minus with a box-score prior; whiskers: ± 1 standard error. "
+                   "**Click a player** to open him.")  # fmt: skip
+        if (pick := C.selected(ev)) is not None:
+            goto("Player", clear="l_lead", p_name=pick, p_season=season)
+
+
 def team_view() -> None:
-    con = _con()
-    c1, c2, c3 = st.columns([1, 2, 1])
-    season = c1.selectbox("Season", _seasons(), format_func=season_label)
-    teams = D.q(
-        con,
-        "select distinct team_id from metrics.team_season where season = ? order by 1",
-        [season],
-    ).team_id.tolist()
-    team = c2.selectbox("Team", teams, format_func=lambda t: team_label(t, season))
-    stype = c3.selectbox("Games", ["regular", "playoffs"])
-    r = D.ratings(
-        con, "team_season", "r.season = ? and r.team_id = ? and r.season_type = ?",
-        [season, team, stype],
-    )  # fmt: skip
+    con, mode = _con(), _theme()
+    c1, c2, c3, c4 = st.columns([1, 2, 1, 2])
+    seasons = _seasons()
+    _valid("t_season", seasons)
+    season = c1.selectbox("Season", seasons, format_func=season_label, key="t_season")
+    teams = D.q(con, "select distinct team_id from metrics.team_season where season = ? "
+                "order by 1", [season]).team_id.tolist()  # fmt: skip
+    _valid("t_team", teams)
+    team = c2.selectbox("Team", teams, format_func=lambda t: team_label(t, season), key="t_team")
+    stype = c3.selectbox("Games", ["regular", "playoffs"], key="t_stype")
+    others = [t for t in teams if t != team]
+    _valid("t_cmp", [None, *others])
+    cmp = c4.selectbox(
+        "Compare with",
+        [None, *others],
+        key="t_cmp",
+        format_func=lambda t: "—" if t is None else team_label(t, season),
+    )
+    r = D.ratings(con, "team_season", "r.season = ? and r.team_id = ? and r.season_type = ?",
+                  [season, team, stype])  # fmt: skip
     if r.empty:
         st.warning("No ratings for this selection.")
         return
-    adj = D.q(
-        con,
-        """select a.measure, a.rating_adj, a.value_adj, a.schedule from metrics.team_season_adj a
-           join metrics.best_tier b
-             on b.level = 'team_season' and b.season = a.season and b.measure = a.measure
-            and b.tier = a.tier
-           where a.season = ? and a.team_id = ?""",
-        [season, team],
-    ).set_index("measure")
+    adj_q = """select a.measure, a.rating_adj, a.value_adj, a.schedule
+               from metrics.team_season_adj a join metrics.best_tier b
+                 on b.level = 'team_season' and b.season = a.season
+                and b.measure = a.measure and b.tier = a.tier
+               where a.season = ? and a.team_id = ?"""
+    adj = D.q(con, adj_q, [season, team]).set_index("measure")
     use_adj = stype == "regular" and not adj.empty and st.toggle(
-        "Adjust for opponents", value=False,
+        "Adjust for opponents", value=False, key="t_adj",
         help="What the team would have posted against an average schedule at a neutral site.",
     )  # fmt: skip
     d = r.set_index("measure")
     axes = [m for m in D.HEADLINE if m in d.index]
     src = adj.rating_adj if use_adj else d.rating
+    series = {team_label(team, season): [src.get(m) for m in axes]}
+    if cmp is not None:
+        rc = D.ratings(con, "team_season", "r.season = ? and r.team_id = ? and "
+                       "r.season_type = ?", [season, cmp, stype]).set_index("measure")  # fmt: skip
+        ac = D.q(con, adj_q, [season, cmp]).set_index("measure")
+        csrc = ac.rating_adj if use_adj and not ac.empty else rc.rating
+        series[team_label(cmp, season)] = [csrc.get(m) for m in axes]
     left, right = st.columns([1, 1])
     with left:
-        st.plotly_chart(
-            court.radar([D.LABELS[m] for m in axes],
-                        {team_label(team, season): [src.get(m) for m in axes]}),
-            width="stretch",
-        )  # fmt: skip
-        st.caption(
-            "Teams have five axes: Presence is per-possession impact of players (see the "
-            "roster)." + (" Opponent-adjusted." if use_adj else "")
-        )
+        st.plotly_chart(C.radar([D.LABELS[m] for m in axes], series, mode), width="stretch",
+                        key="t_radar")  # fmt: skip
+        st.caption("Presence is a player measure (see the roster)."
+                   + (" Opponent-adjusted." if use_adj else ""))  # fmt: skip
     with right:
-        table = rating_table(r, D.ordered(d.index))
-        if not adj.empty:
-            key = {D.LABELS.get(m) or D.COMPONENT_LABELS.get(m, m): m for m in adj.index}
-            table["opp-adjusted"] = table.measure.map(
-                lambda x: (
-                    round(float(adj.rating_adj.get(key.get(x), float("nan"))))
-                    if pd.notna(adj.rating_adj.get(key.get(x), float("nan")))
-                    else None
-                )
-            )
-        st.dataframe(table, hide_index=True, height=380)
+        dimension_charts(r, mode, "team", adj if use_adj else None)
 
     st.subheader("Shot zones")
     tab_o, tab_d = st.tabs(["Offense", "Defense (opponent shots)"])
     where = "c.season = ? and c.season_type = ? and c.team_id = ?"
-    short = "the " + team_label(team, season).split()[-1]
+    short = "the " + short_team(team, season)
     with tab_o:
         zone_charts(D.zone_profile(con, "metrics.team_season_counts", "a_", where,
                                    [season, stype, team]), short, key="off")  # fmt: skip
@@ -200,64 +346,74 @@ def team_view() -> None:
                                    [season, stype, team]), short, allowed=True,
                     key="def")  # fmt: skip
 
-    st.subheader("Season trend (game ratings, 10-game rolling mean)")
-    g = D.ratings(
-        con, "team_game", "r.season = ? and r.team_id = ? and r.measure in "
-        "('shooting', 'defense', 'ball_control', 'backcourt', 'frontcourt')",
-        [season, team],
-    ).merge(D.q(con, "select game_id, game_date from stg.games"), on="game_id")  # fmt: skip
+    st.subheader("Season trend")
+    g = D.ratings(con, "team_game", "r.season = ? and r.team_id = ? and r.measure in "
+                  "('shooting', 'defense', 'ball_control', 'backcourt', 'frontcourt')",
+                  [season, team]).merge(D.q(con, "select game_id, game_date from stg.games"),
+                                        on="game_id")  # fmt: skip
     if not g.empty:
-        g = g.sort_values("game_date")
-        g["rolling"] = g.groupby("measure").rating.transform(
-            lambda s: s.rolling(10, min_periods=3).mean()
-        )
-        g["dimension"] = g.measure.map(D.LABELS)
-        st.plotly_chart(
-            px.line(g, x="game_date", y="rolling", color="dimension",
-                    labels={"rolling": "rating", "game_date": ""}).add_hline(
-                        y=50, line_dash="dot", line_color="gray"),
-            width="stretch",
-        )  # fmt: skip
+        st.plotly_chart(trend_chart(g, mode, "game rating, 10-game mean"), width="stretch",
+                        key="t_trend")  # fmt: skip
+        st.caption("Click a legend entry to hide or show a dimension.")
 
     st.subheader("Roster")
     roster = D.q(
         con,
-        """select p.person_id, p.season_type,
-                  p.shooting_rating, p.defense_rating, p.ball_control_rating,
+        """select p.person_id, p.shooting_rating, p.defense_rating, p.ball_control_rating,
                   p.backcourt_rating, p.frontcourt_rating, i.impact_rating as presence_rating,
-                  i.impact as impact_per100, i.points_added, r.usage, c.minutes
+                  i.impact, i.impact_se, i.points_added, r.usage, c.minutes
            from metrics.player_season p
-           join metrics.player_season_counts c
-             using (season, season_type, person_id, team_id)
+           join metrics.player_season_counts c using (season, season_type, person_id, team_id)
            left join metrics.player_impact i on i.season = p.season and i.person_id = p.person_id
-           left join metrics.player_role r
-             using (season, season_type, person_id, team_id)
+           left join metrics.player_role r using (season, season_type, person_id, team_id)
            where p.season = ? and p.team_id = ? and p.season_type = ?
            order by c.minutes desc""",
         [season, team, stype],
     ).merge(_players(), on="person_id", how="left")
     roster["usage"] = 100 * roster.usage
-    cols = [
-        "player", "minutes", "usage", "shooting_rating", "defense_rating",
-        "ball_control_rating", "backcourt_rating", "frontcourt_rating", "presence_rating",
-        "impact_per100", "points_added",
-    ]  # fmt: skip
-    st.dataframe(roster[cols].round(1), hide_index=True)
-    st.caption(
-        "usage: share of the team's plays he finishes while on court (%). presence / "
-        "impact: per-possession impact (adjusted plus-minus, all teams that season), points "
-        "per 100 possessions; points added: over the season, vs league average."
-    )
+    plot = roster.dropna(subset=["impact", "usage"])
+    if not plot.empty:
+        fig = go.Figure(go.Scatter(
+            x=plot.usage, y=plot.impact, mode="markers+text",
+            text=plot.player.str.split().str[-1], textposition="top center",
+            textfont={"size": 11, "color": C.THEME[mode]["ink2"]},
+            marker={"size": (plot.minutes.fillna(0) / plot.minutes.max() * 34 + 8),
+                    "color": [C.good_bad(v, 5, mode) for v in plot.impact],
+                    "line": {"width": 1, "color": C.THEME[mode]["muted"]}},
+            customdata=plot[["player"]].to_numpy(),
+            hovertemplate="%{customdata[0]}<br>usage %{x:.0f}%, impact %{y:+.1f} per 100"
+                          "<extra></extra>",
+        ))  # fmt: skip
+        fig.add_hline(y=0, line_color=C.THEME[mode]["muted"], line_width=1)
+        pad = (plot.impact.max() - plot.impact.min()) * 0.15 + 0.5
+        C.base_layout(
+            fig,
+            420,
+            xaxis={"title": "usage: % of team plays he finishes"},
+            yaxis={
+                "title": "impact: points per 100 vs league",
+                "range": [plot.impact.min() - pad, plot.impact.max() + pad],
+            },
+        )
+        ev = st.plotly_chart(fig, width="stretch", on_select="rerun", selection_mode="points",
+                             key="t_roster")  # fmt: skip
+        st.caption("Bubble size: minutes. **Click a player** to open him.")
+        if (pick := C.selected(ev)) is not None:
+            goto("Player", clear="t_roster", p_name=pick, p_season=season)
+    with st.expander("Roster table"):
+        cols = ["player", "minutes", "usage", "shooting_rating", "defense_rating",
+                "ball_control_rating", "backcourt_rating", "frontcourt_rating",
+                "presence_rating", "impact", "points_added"]  # fmt: skip
+        st.dataframe(roster[cols].round(1), hide_index=True)
 
 
 def game_view() -> None:
-    con = _con()
+    con, mode = _con(), _theme()
     c1, c2 = st.columns([1, 3])
     season = c1.selectbox("Season", _seasons(), format_func=season_label, key="g_season")
     games = D.q(
         con,
-        """select game_id, game_date, home_team_id, away_team_id, home_score, away_score,
-                  season_type
+        """select game_id, game_date, home_team_id, away_team_id, home_score, away_score
            from stg.games where season = ? and game_id in
                 (select distinct game_id from metrics.team_game where season = ?)
            order by game_date desc""",
@@ -272,9 +428,8 @@ def game_view() -> None:
         away, home = team_label(r.away_team_id, season), team_label(r.home_team_id, season)
         return f"{r.game_date:%Y-%m-%d}  {away} {r.away_score} @ {home} {r.home_score}"
 
-    gid = c2.selectbox("Game", games.game_id.tolist(), format_func=label)
+    gid = c2.selectbox("Game", games.game_id.tolist(), format_func=label, key="g_game")
     r = D.ratings(con, "team_game", "r.game_id = ?", [gid])
-    # Season baseline per team: mean team-game rating this season (spec section 2)
     base = D.q(
         con,
         """select team_id, measure, avg(rating) as season_avg
@@ -294,81 +449,92 @@ def game_view() -> None:
             t = r[r.team_id == team].set_index("measure")
             axes = [m for m in D.HEADLINE if m in t.index]
             st.plotly_chart(
-                court.radar([D.LABELS[m] for m in axes],
-                            {"tonight": [t.rating.get(m) for m in axes],
-                             "season avg": [t.season_avg.get(m) for m in axes]}),
+                C.radar([D.LABELS[m] for m in axes],
+                        {"tonight": [t.rating.get(m) for m in axes],
+                         "season average": [t.season_avg.get(m) for m in axes]}, mode),
                 width="stretch", key=f"radar_{team}",
             )  # fmt: skip
-            show = t.loc[D.ordered(t.index)].reset_index()
-            show["measure"] = show.measure.map(
-                lambda m: D.LABELS.get(m) or D.COMPONENT_LABELS.get(m, m)
-            )
-            st.dataframe(
-                show[["measure", "value", "rating", "season_avg", "delta"]].round(1),
-                hide_index=True, height=300,
+            show = [m for m in D.ordered(t.index) if m in D.LABELS or m in D.COMPONENT_LABELS]
+            show = [m for m in show if not m.startswith(("defense_stl", "defense_blk",
+                                                         "defense_pf", "ball_ato", "ball_ast",
+                                                         "ball_shot"))]  # fmt: skip
+            st.plotly_chart(
+                C.diverging_bars([label_of(m) for m in show], [t.delta.get(m) for m in show],
+                                 mode, "rating tonight minus season average"),
+                width="stretch", key=f"delta_{team}",
             )  # fmt: skip
-    st.caption(
-        "delta = tonight's rating minus the team's average game rating this season: the "
-        "in-game adjustment signal. Both are on the game scale (never compare a game rating "
-        "with a season rating)."
-    )
+    st.caption("Bars: tonight's rating minus the team's average game rating this season, the "
+               "in-game adjustment signal (blue = better than usual).")  # fmt: skip
     st.subheader("Players")
     p = D.q(
         con,
         """select g.*, c.minutes from metrics.player_game g
            join metrics.player_game_counts c using (game_id, person_id, team_id)
-           where g.game_id = ? order by g.team_id, c.minutes desc""",
+           where g.game_id = ? and c.minutes >= 8 order by g.team_id, c.minutes desc""",
         [gid],
     ).merge(_players(), on="person_id", how="left")
-    cols = ["team_id", "player", "minutes"] + [f"{m}_rating" for m in D.HEADLINE
-                                               if f"{m}_rating" in p.columns]  # fmt: skip
-    p["team_id"] = p.team_id.map(lambda t: team_label(t, season))
-    st.dataframe(p[cols].round(1), hide_index=True)
+    hcols = [f"{m}_rating" for m in D.HEADLINE if f"{m}_rating" in p.columns]
+    pcols = st.columns(len(teams))
+    for col, team in zip(pcols, teams, strict=True):
+        with col:
+            sub = p[p.team_id == team]
+            if sub.empty:
+                continue
+            st.markdown(f"**{short_team(team, season)}** (8+ minutes)")
+            st.plotly_chart(C.rating_heatmap(sub, "player", hcols,
+                                             [D.LABELS[c[:-7]] for c in hcols], mode),
+                            width="stretch", key=f"heat_{team}")  # fmt: skip
 
 
 def player_view() -> None:
-    con = _con()
+    con, mode = _con(), _theme()
     players = _players()
-    rated = D.q(
-        con,
-        "select person_id, count(*) n from metrics.player_season where team_id = 0 group by 1",
-    ).merge(players, on="person_id")
-    name = st.selectbox(
-        "Player", sorted(rated.player.dropna().unique()),
-        index=None, placeholder="Type a name",
-    )  # fmt: skip
+    rated = D.q(con, "select person_id, count(*) n from metrics.player_season "
+                "where team_id = 0 group by 1").merge(players, on="person_id")  # fmt: skip
+    names = sorted(rated.player.dropna().unique())
+    _valid("p_name", names)
+    c1, c2, c3 = st.columns([2, 1, 2])
+    preset = {} if "p_name" in st.session_state else {"index": None}
+    name = c1.selectbox("Player", names, placeholder="Type a name", key="p_name", **preset)
     if not name:
+        st.info("Pick a player, or click one in the League, Team or Market view.")
         return
     pid = int(rated[rated.player == name].person_id.iloc[0])
-    seasons = D.q(
-        con,
-        "select distinct season from metrics.player_season where person_id = ? order by 1 desc",
-        [pid],
-    ).season.tolist()
-    season = st.selectbox("Season", seasons, format_func=season_label)
-    r = D.ratings(
-        con, "player_season",
-        "r.person_id = ? and r.season = ? and r.season_type = 'regular' and r.team_id = 0",
-        [pid, season],
-    )  # fmt: skip
-    imp = D.impact(con, pid)
-    now = imp[imp.season == season]
-    d = r.set_index("measure") if not r.empty else pd.DataFrame()
-    axes = D.HEADLINE + ["presence"]
-    vals = [d.rating.get(m) if not d.empty else None for m in D.HEADLINE]
-    vals.append(now.impact_rating.iloc[0] if not now.empty else None)
+    seasons = D.q(con, "select distinct season from metrics.player_season where person_id = ? "
+                  "order by 1 desc", [pid]).season.tolist()  # fmt: skip
+    _valid("p_season", seasons)
+    season = c2.selectbox("Season", seasons, format_func=season_label, key="p_season")
+    cmp_name = c3.selectbox("Compare with", [n for n in names if n != name], index=None,
+                            placeholder="Another player, same season", key="p_cmp")  # fmt: skip
+
+    def radar_vals(person: int) -> tuple[pd.DataFrame, list]:
+        rr = D.ratings(con, "player_season", "r.person_id = ? and r.season = ? and "
+                       "r.season_type = 'regular' and r.team_id = 0", [person, season])  # fmt: skip
+        dd = rr.set_index("measure") if not rr.empty else pd.DataFrame()
+        ii = D.impact(con, person)
+        ii = ii[ii.season == season]
+        vals = [dd.rating.get(m) if not dd.empty else None for m in D.HEADLINE]
+        vals.append(ii.impact_rating.iloc[0] if not ii.empty else None)
+        return rr, vals
+
+    r, vals = radar_vals(pid)
+    series = {name: vals}
+    if cmp_name:
+        cpid = int(rated[rated.player == cmp_name].person_id.iloc[0])
+        series[cmp_name] = radar_vals(cpid)[1]
     left, right = st.columns(2)
     with left:
-        st.plotly_chart(court.radar([D.LABELS[m] for m in axes], {name: vals}),
-                        width="stretch")  # fmt: skip
-        st.caption(
-            "Backcourt / Frontcourt are rated only among players at least half guard / "
-            "half forward-center. Presence is per-possession impact (adjusted plus-minus)."
-        )
+        axes = D.HEADLINE + ["presence"]
+        st.plotly_chart(C.radar([D.LABELS[m] for m in axes], series, mode), width="stretch",
+                        key="p_radar")  # fmt: skip
+        st.caption("Backcourt / Frontcourt are rated only among players at least half guard / "
+                   "half forward-center. Presence is per-possession impact.")  # fmt: skip
     with right:
         if not r.empty:
-            st.dataframe(rating_table(r, D.ordered(d.index)), hide_index=True, height=380)
+            dimension_charts(r, mode, "player")
 
+    imp = D.impact(con, pid)
+    now = imp[imp.season == season]
     st.subheader("Impact per possession")
     if now.empty:
         st.info("No lineup data for this season (play-by-play lineups exist from 1996-97).")
@@ -377,78 +543,93 @@ def player_view() -> None:
         c = st.columns(5)
         c[0].metric("Impact per 100 poss.", f"{i.impact:+.1f}", help="Points per 100 "
                     "possessions vs league average, offense + defense, adjusted for "
-                    "teammates and opponents (ridge regression on every stint).")  # fmt: skip
+                    "teammates and opponents, with a box-score prior.")  # fmt: skip
         c[1].metric("Offense / defense", f"{i.impact_off:+.1f} / {i.impact_def:+.1f}")
         c[2].metric("Uncertainty (± 1 se)", f"{i.impact_se:.1f}")
         c[3].metric("Points added", f"{i.points_added:+.0f}",
                     help="Over the season vs league average: impact x possessions.")  # fmt: skip
         per36 = i.points_added / i.minutes * 36 if pd.notna(i.minutes) and i.minutes else None
         c[4].metric("Per 36 minutes", f"{per36:+.1f}" if per36 is not None else "—",
-                    help="Points added per 36 minutes played. Prefer the per-possession "
-                    "number to compare players on fast and slow teams.")  # fmt: skip
-        role = (f"Usage {100 * i.usage:.0f}% of team plays, assists on "
+                    help="Points added per 36 minutes. Prefer the per-possession number to "
+                    "compare players on fast and slow teams.")  # fmt: skip
+        role = (f" Usage {100 * i.usage:.0f}% of team plays; assists on "
                 f"{100 * i.ast_pct:.0f}% of teammates' baskets while on court."
                 if pd.notna(i.usage) else "")  # fmt: skip
-        st.caption(
-            f"{int(i.poss):,} possessions on court. Season-only estimate (no prior): "
-            f"{i.season_only:+.1f}. {role}"
-        )
+        st.caption(f"{int(i.poss):,} possessions on court.{role}")
         hist = imp.dropna(subset=["impact"])
-        if len(hist) > 1:
-            fig = go.Figure([
-                go.Scatter(x=list(hist.season) + list(hist.season[::-1]),
-                           y=list(hist.impact + hist.impact_se)
-                           + list((hist.impact - hist.impact_se)[::-1]),
-                           fill="toself", line={"width": 0}, hoverinfo="skip",
-                           fillcolor="rgba(57,135,229,0.18)", showlegend=False),
-                go.Scatter(x=hist.season, y=hist.impact, mode="lines+markers",
-                           line={"color": "#3987e5", "width": 2}, name="impact",
-                           hovertemplate="%{x}: %{y:+.1f} per 100<extra></extra>"),
-            ])  # fmt: skip
-            fig.add_hline(y=0, line_color="#898781", line_width=1)
-            fig.update_layout(height=260, margin={"l": 0, "r": 0, "t": 10, "b": 0},
-                              showlegend=False,
-                              yaxis={"title": "pts / 100 poss."},
-                              xaxis={"title": "season (start year)"})  # fmt: skip
-            st.plotly_chart(fig, width="stretch")
-            st.caption("Band: ± 1 standard error.")
+        t = C.THEME[mode]
+        fig = go.Figure([
+            go.Scatter(x=list(hist.season) + list(hist.season[::-1]),
+                       y=list(hist.impact + hist.impact_se)
+                       + list((hist.impact - hist.impact_se)[::-1]),
+                       fill="toself", line={"width": 0}, hoverinfo="skip",
+                       fillcolor=C.rgba(t["good"], 0.18), showlegend=False),
+            go.Scatter(x=hist.season, y=hist.impact, mode="lines+markers", name="impact",
+                       line={"color": t["series"][0], "width": 2.5},
+                       hovertemplate="%{x}: %{y:+.1f}<extra>impact</extra>"),
+            go.Scatter(x=hist.season, y=hist.box, mode="lines", name="box-score model",
+                       line={"color": t["series"][1], "width": 1.5, "dash": "dot"},
+                       hovertemplate="%{x}: %{y:+.1f}<extra>box model</extra>"),
+            go.Scatter(x=hist.season, y=hist.season_only, mode="markers",
+                       name="this season's plus-minus alone",
+                       marker={"color": t["series"][2], "size": 7},
+                       hovertemplate="%{x}: %{y:+.1f}<extra>season only</extra>"),
+        ])  # fmt: skip
+        fig.add_hline(y=0, line_color=t["muted"], line_width=1)
+        C.base_layout(fig, 300, yaxis={"title": "points per 100 vs league"},
+                      xaxis={"title": "season (start year)"},
+                      legend={"orientation": "h", "y": -0.25})  # fmt: skip
+        st.plotly_chart(fig, width="stretch", key="p_hist")
+        st.caption(
+            "Impact (band ± 1 se) combines the plus-minus regression with two "
+            "starting points: last season's impact and what the box score says."
+        )
     if D.has_market(con):
         mk = D.q(con, "select * from market.players where person_id = ?", [pid])
-        if not mk.empty and pd.notna(mk.impact.iloc[0]):
-            m = mk.iloc[0]
-            st.subheader(f"Market ({int(m.season)}-{(int(m.season) + 1) % 100:02d})")
+        pr = D.q(con, "select * from market.params")
+        if not mk.empty and pd.notna(mk.impact.iloc[0]) and not pr.empty:
+            m, p = mk.iloc[0], pr.iloc[0]
+            st.subheader(f"Market ({season_label(int(m.season))})")
             c = st.columns(4)
-            sal = f"${m.salary / 1e6:.1f}M" if pd.notna(m.salary) else "unsigned"
-            c[0].metric("Salary", sal)
+            c[0].metric("Salary", f"${m.salary / 1e6:.1f}M" if pd.notna(m.salary)
+                        else "unsigned")  # fmt: skip
             c[1].metric("Estimated fair salary", f"${m.fair_salary / 1e6:.1f}M")
             c[2].metric("Wins above replacement", f"{m.war:.1f}",
                         help=f"Bad / good case: {m.war_p10:.1f} / {m.war_p90:.1f}")  # fmt: skip
+
+            def fair(w: float) -> float:
+                return min(p.vet_min + max(w, 0) * p.dollars_per_win, p.max_salary) / 1e6
+
             c[3].metric("Risk", m.risk)
+            marks = {"fair": m.fair_salary / 1e6}
+            if pd.notna(m.salary):
+                st.plotly_chart(
+                    C.bullet(
+                        m.salary / 1e6,
+                        marks,
+                        mode,
+                        band=(fair(m.war_p10), fair(m.war_p90)),
+                        label="salary",
+                    ),
+                    width="stretch",
+                    key="p_bullet",
+                )
+                st.caption("Bar: salary. Line: estimated fair salary; band: its bad-to-good "
+                           "range from the impact uncertainty.")  # fmt: skip
             if m.risk_flags is not None and len(m.risk_flags):
                 st.caption("Risk factors: " + "; ".join(m.risk_flags))
     st.subheader("Shot zones")
-    zone_charts(
-        D.zone_profile(con, "metrics.player_season_counts", "a_",
-                       "c.season = ? and c.season_type = 'regular' and c.person_id = ? "
-                       "and c.team_id = 0", [season, pid]),
-        name, key="player",
-    )  # fmt: skip
+    zone_charts(D.zone_profile(con, "metrics.player_season_counts", "a_",
+                               "c.season = ? and c.season_type = 'regular' and "
+                               "c.person_id = ? and c.team_id = 0", [season, pid]),
+                name, key="player")  # fmt: skip
     st.subheader("Game log")
-    g = D.ratings(
-        con, "player_game", "r.person_id = ? and r.season = ? and r.measure in "
-        "('shooting', 'defense', 'ball_control')", [pid, season],
-    ).merge(D.q(con, "select game_id, game_date from stg.games"), on="game_id")  # fmt: skip
+    g = D.ratings(con, "player_game", "r.person_id = ? and r.season = ? and r.measure in "
+                  "('shooting', 'defense', 'ball_control')", [pid, season]).merge(
+        D.q(con, "select game_id, game_date from stg.games"), on="game_id")  # fmt: skip
     if not g.empty:
-        g = g.sort_values("game_date")
-        g["rolling"] = g.groupby("measure").rating.transform(
-            lambda s: s.rolling(10, min_periods=3).mean()
-        )
-        g["dimension"] = g.measure.map(D.LABELS)
-        st.plotly_chart(
-            px.line(g, x="game_date", y="rolling", color="dimension",
-                    labels={"rolling": "rating (10-game mean)", "game_date": ""}),
-            width="stretch",
-        )  # fmt: skip
+        st.plotly_chart(trend_chart(g, mode, "rating, 10-game mean"), width="stretch",
+                        key="p_log")  # fmt: skip
 
 
 def live_view() -> None:
@@ -460,16 +641,16 @@ def live_view() -> None:
 def market_view() -> None:
     from courtvision.app import market_page
 
-    market_page.render(_con(), team_label, _theme())
+    market_page.render(_con(), team_label, _theme(), goto)
 
 
-VIEWS = {"Team": team_view, "Game": game_view, "Player": player_view, "Market": market_view,
-         "Live": live_view}  # fmt: skip
+VIEWS = {"League": league_view, "Team": team_view, "Game": game_view, "Player": player_view,
+         "Market": market_view, "Live": live_view}  # fmt: skip
 
 st.sidebar.title("courtvision")
-choice = st.sidebar.radio("View", list(VIEWS))
+choice = st.sidebar.radio("View", list(VIEWS), key="view")
 st.sidebar.caption(
-    "0-100 ratings: 50 = league average that season, 10 = one standard deviation. "
-    "Tier A = play-by-play (1996-97+); B / B- / C = box-score versions for older seasons."
+    "0-100 ratings: 50 = league average that season, 10 = one standard deviation. Blue "
+    "helps, red hurts. Click teams and players in any chart to open them."
 )
 VIEWS[choice]()
