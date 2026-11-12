@@ -17,11 +17,13 @@ dependencies = [
     "kaggle>=1.7.4",
     "nba_api>=1.10",
     "pandas>=2.2",
+    "plotly>=7.1.0",
     "polars>=1.9",
     "pyarrow>=17",
     "python-dotenv>=1.0",
     # kaggle 2.2.x imports `six` without declaring it; remove once upstream fixes it.
     "six>=1.16",
+    "streamlit>=1.67.0",
     "typer>=0.12",
 ]
 
@@ -30,6 +32,9 @@ courtvision = "courtvision.cli:app"
 
 [dependency-groups]
 dev = [
+    "ipykernel>=7.4.0",
+    "nbclient>=0.11.0",
+    "nbformat>=5.11.1",
     "pytest>=8",
     "ruff>=0.6",
 ]
