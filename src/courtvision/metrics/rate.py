@@ -108,12 +108,18 @@ def measure_select(m: M.Measure, level: str, table: str, keys: list[str], starts
     """Long rows (one per unit) for one measure on one level's counts table."""
     game = "c.game_id" if "game_id" in keys else "null::varchar"
     person = "c.person_id" if "person_id" in keys else "null::bigint"
+    expr = f"({m.expr})"
+    # Spec 5.4: a player is rated in Backcourt / Frontcourt only if at least half his
+    # position weight is in that group, so the reference is backcourt (frontcourt) players.
+    if "person_id" in keys and m.family in ("backcourt", "frontcourt"):
+        w = "w_bc" if m.family == "backcourt" else "w_fc"
+        expr = f"case when coalesce(c.{w}, 0) >= 0.5 then {expr} end"
     return f"""
 select * from (
     select '{level}' as level, c.season, c.season_type, {game} as game_id, c.team_id,
            {person} as person_id, '{m.tier}' as tier, '{m.name}' as measure,
            '{m.family}' as family,
-           ({m.expr})::double as value,
+           {expr}::double as value,
            ({m.exposure})::double as exposure
     from {table} c
     join metrics.league_baselines L using (season)
@@ -316,7 +322,8 @@ with r as (
            case when level like 'player%' then exposure else 1 end as w
     from ({adjusted}) v
     where season_type = 'regular' and qualifies and value_adj is not null
-      and not (level = 'player_season' and team_id <> 0)
+      -- whole-season rows for player measures; Presence exists only per team
+      and not (level = 'player_season' and team_id <> 0 and family <> 'presence')
 ), m as (
     select level, season, tier, measure, sum(w * value_adj) / sum(w) as mu,
            sum(w) as sw, count(*) as n_ref
@@ -337,8 +344,11 @@ group by r.level, r.season, r.tier, r.measure;
 create or replace table metrics.ratings_long as
 select v.level, v.season, v.season_type, v.game_id, v.team_id, v.person_id, v.tier,
        v.measure, v.family, v.value, v.value_adj, v.exposure, not v.qualifies as low_sample,
-       greatest(0, least(100, 50 + 10 * (v.value_adj - ref.mu) / nullif(ref.sigma, 0)))
-           as rating
+       -- explicit null test: DuckDB's least() / greatest() skip NULL arguments, so an
+       -- undefined z would otherwise clip to 100
+       case when ref.sigma > 0 and v.value_adj is not null
+            then greatest(0, least(100, 50 + 10 * (v.value_adj - ref.mu) / ref.sigma))
+       end as rating
 from ({adjusted}) v
 left join metrics.reference_stats ref using (level, season, tier, measure);
 """,

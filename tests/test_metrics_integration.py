@@ -259,3 +259,27 @@ def test_t6_defense_turnovers_and_fouls_by_hand(con, game_id):
         # play-by-play can differ from the box by one (team turnovers)
         assert math.isclose(got["defense_dt"], dt, abs_tol=2.0), (team, got, dt)
         assert math.isclose(got["defense_df"], df, abs_tol=1.0), (team, got, df)
+
+
+def test_every_measure_has_a_reference_and_ratings_spread(con):
+    # A missing reference population must leave ratings NULL, never clip them to 0/100.
+    rows = con.execute(
+        """select level, measure, tier, stddev_pop(rating) sd, avg(rating) m
+           from metrics.ratings_long
+           where season = 2024 and season_type = 'regular' and not low_sample
+           group by all
+           having count(rating) = 0 or stddev_pop(rating) < 3"""
+    ).fetchall()
+    assert rows == []
+
+
+def test_backcourt_frontcourt_rated_only_for_their_players(con):
+    bad = one(
+        con,
+        """select count(*) from metrics.ratings_long r
+           join metrics.positions p using (person_id)
+           where r.level like 'player%' and (
+                 (r.family = 'backcourt' and coalesce(p.w_bc, 0) < 0.5)
+              or (r.family = 'frontcourt' and coalesce(p.w_fc, 0) < 0.5))""",
+    )[0]
+    assert bad == 0
