@@ -35,13 +35,19 @@ def season_string(start_year: int) -> str:
     return f"{start_year}-{(start_year + 1) % 100:02d}"
 
 
+ENDPOINT_GROUPS = ("shots", "pbp", "rotations")
+
+
 def pull(
     client: CachedClient,
     season: int,
     season_types: Iterable[str] = SEASON_TYPES,
     *,
+    only: Iterable[str] = ENDPOINT_GROUPS,
     progress_every: int = 50,
 ) -> dict[str, int]:
+    """Pull ``season``. ``only`` limits which endpoint groups are fetched
+    (the game log is always fetched: it defines the game list)."""
     from nba_api.stats.endpoints import (
         gamerotation,
         leaguegamelog,
@@ -50,6 +56,11 @@ def pull(
     )
 
     s = season_string(season)
+    only = set(only)
+    unknown = only - set(ENDPOINT_GROUPS)
+    if unknown:
+        raise ValueError(f"unknown endpoint group(s) {sorted(unknown)}; use {ENDPOINT_GROUPS}")
+    season_types = list(season_types)
     games: dict[str, set[int]] = {}
     for st in season_types:
         r = client.get(
@@ -63,21 +74,26 @@ def pull(
     teams = sorted({t for ts in games.values() for t in ts})
     log.info("%s: %d games, %d teams", s, len(games), len(teams))
 
-    for st in season_types:
-        for team_id in teams:
-            client.get(
-                shotchartdetail.ShotChartDetail,
-                team_id=team_id,
-                player_id=0,
-                context_measure_simple="FGA",
-                season_nullable=s,
-                season_type_all_star=SEASON_TYPES[st],
-            )
-    log.info("shots done (%d network calls so far)", client.network_calls)
+    if "shots" in only:
+        for st in season_types:
+            for team_id in teams:
+                client.get(
+                    shotchartdetail.ShotChartDetail,
+                    team_id=team_id,
+                    player_id=0,
+                    context_measure_simple="FGA",
+                    season_nullable=s,
+                    season_type_all_star=SEASON_TYPES[st],
+                )
+        log.info("shots done (%d network calls so far)", client.network_calls)
 
+    if not only & {"pbp", "rotations"}:
+        return {"games": len(games), "teams": len(teams), "network_calls": client.network_calls}
     for i, game_id in enumerate(sorted(games), 1):
-        client.get(playbyplayv3.PlayByPlayV3, game_id=game_id)
-        client.get(gamerotation.GameRotation, game_id=game_id)
+        if "pbp" in only:
+            client.get(playbyplayv3.PlayByPlayV3, game_id=game_id)
+        if "rotations" in only:
+            client.get(gamerotation.GameRotation, game_id=game_id)
         if i % progress_every == 0 or i == len(games):
             log.info(
                 "games %d/%d (network %d, cache hits %d)",

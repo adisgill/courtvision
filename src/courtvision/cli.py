@@ -53,6 +53,9 @@ def nba_api(
     season_type: list[str] = typer.Option(
         ["regular", "play_in", "playoffs"], help="regular / play_in / playoffs (repeatable)."
     ),
+    only: list[str] = typer.Option(
+        ["shots", "pbp", "rotations"], help="Endpoint groups to pull: shots / pbp / rotations."
+    ),
     load_only: bool = typer.Option(False, help="Skip the network; rebuild from the cache."),
     min_interval: float = typer.Option(1.0, help="Minimum seconds between requests."),
 ) -> None:
@@ -67,7 +70,7 @@ def nba_api(
     paths = get_paths()
     if not load_only:
         client = CachedClient(cache_dir=paths.nba_api_raw, min_interval=min_interval)
-        summary = nba_api_pull.pull(client, season, season_type)
+        summary = nba_api_pull.pull(client, season, season_type, only=only)
         typer.echo(f"pulled: {summary}")
     with connect() as con:
         counts = nba_api_pull.load(con, paths.nba_api_raw, paths.parquet / "nba_api", season)
