@@ -266,15 +266,36 @@ def _has_coach_files() -> bool:
 @ingest_app.command("coaches")
 def ingest_coaches(
     download: bool = typer.Option(True, help="Download from Kaggle first (else use the cache)."),
+    fetch_current: bool = typer.Option(
+        False,
+        "--fetch-current",
+        help="Fetch this season's coaches page from Basketball-Reference (one request, "
+        "cached per day). Without it the newest cached page is used.",
+    ),
 ) -> None:
-    """Head coach of every team-game since 1996-97 -> coach.coaches, coach.assignments."""
-    from courtvision.db import connect
-    from courtvision.ingest import coaches
+    """Head coach of every team-game since 1996-97 -> coach.coaches, coach.assignments,
+    coach.current. This season comes from Basketball-Reference's season coaches page
+    (``--fetch-current``, cached under data/raw/coaches/bbref_current/<date>); without one,
+    each team keeps last season's coach, flagged ``assumed``."""
+    import logging
 
+    from courtvision.db import connect
+    from courtvision.ingest import bbref_coaches, coaches
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     if download or not _has_coach_files():
         coaches.download(_coach_raw())
+    root = get_paths().data / "raw" / "coaches" / "bbref_current"
     with connect() as con:
-        res = coaches.load(con, _coach_raw())
+        season = con.execute("select max(season) from stg.games where season_type = 'regular'"
+                             ).fetchall()[0][0]  # fmt: skip
+        if fetch_current:
+            bbref_coaches.fetch(bbref_coaches.today_dir(root), season)
+        cached = bbref_coaches.load_latest(root, season)
+        current, as_of = cached if cached else (None, "")
+        res = coaches.load(con, _coach_raw(), current, season, as_of)
+    src = f"Basketball-Reference page of {as_of}" if as_of else "assumed (last season's coach)"
+    typer.echo(f"this season's coaches: {src}")
     typer.echo(res)
 
 
@@ -395,12 +416,14 @@ def build(
             typer.echo(f"nba_api {s} loaded from cache")
     metrics_build(season=[], skip_pbp=False, workers=workers)
     if (paths.data / "raw" / "salaries" / "mrbridge").exists():
-        ingest_salaries(download=False)
+        # pass every option: called as a function, an unset typer option is a truthy
+        # OptionInfo, and build must never fetch
+        ingest_salaries(download=False, fetch_current=False)
         market_build(season=None)
     else:
         typer.echo("no salary cache: run `courtvision ingest salaries` for the market model")
     if _has_coach_files():
-        ingest_coaches(download=False)
+        ingest_coaches(download=False, fetch_current=False)
         coaching_cmd()
         walkforward_cmd()
     else:

@@ -58,7 +58,9 @@ team, so you can tell coaching from roster.
    games, to assign a coach to every game).
 5. **[Basketball-Reference](https://www.basketball-reference.com/contracts/)** team contract
    pages, fetched on request (`courtvision ingest salaries --fetch-current`: 30 pages,
-   4 s apart, cached per day, kept on your machine): today's contracts, the newest source.
+   4 s apart, cached per day, kept on your machine): today's contracts, the newest source;
+   and the season's coaches page (`courtvision ingest coaches --fetch-current`: one
+   page): this season's head coaches, before the Kaggle records catch up.
 6. **You** — optional `data/salary_overrides.csv` to correct or add any deal
    (format: [`docs/salary_overrides.example.csv`](docs/salary_overrides.example.csv)).
 
@@ -77,7 +79,7 @@ uv run courtvision ingest nba-api --season 2025   # optional: ~1 h cold, for val
 uv run courtvision metrics build                  # every rating, all seasons (~9 min)
 uv run courtvision ingest salaries --fetch-current  # salaries, contracts (today's), cap
 uv run courtvision market build                   # value, budgets, needs, options, free agency
-uv run courtvision ingest coaches                 # coach of every game since 1996-97
+uv run courtvision ingest coaches --fetch-current # coach of every game since 1996-97
 uv run courtvision coaching                       # coaching analytics (~1 min)
 uv run courtvision walkforward                    # test predictions on 5 seasons (~1 min)
 uv run courtvision forecast                       # each team's next game (seconds)

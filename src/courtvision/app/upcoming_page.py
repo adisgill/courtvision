@@ -60,11 +60,16 @@ def _why(con, g, home: str, away: str, mode: str) -> None:
 def _coaches_line(con, home: int, away: int, season: int, short_team) -> None:
     if not _has_table(con, "coach", "h2h"):
         return
-    ch = D.q(con, """select team_id, arg_max(coach_id, game_id) as coach_id,
-                            arg_max(coach_name, game_id) as coach, bool_or(assumed) as assumed
-                     from coach.assignments where team_id in (?, ?)
-                       and season = (select max(season) from coach.assignments)
-                     group by team_id""", [home, away]).set_index("team_id")  # fmt: skip
+    if _has_table(con, "coach", "current"):  # each team's coach now
+        ch = D.q(con, """select team_id, coach_id, coach_name as coach, assumed
+                         from coach.current where team_id in (?, ?)""", [home, away])  # fmt: skip
+    else:
+        ch = D.q(con, """select team_id, arg_max(coach_id, game_id) as coach_id,
+                                arg_max(coach_name, game_id) as coach, bool_or(assumed) as assumed
+                         from coach.assignments where team_id in (?, ?)
+                           and season = (select max(season) from coach.assignments)
+                         group by team_id""", [home, away])  # fmt: skip
+    ch = ch.set_index("team_id")
     if home not in ch.index or away not in ch.index:
         return
     hc, ac = ch.loc[home], ch.loc[away]
@@ -76,6 +81,8 @@ def _coaches_line(con, home: int, away: int, season: int, short_team) -> None:
         rec = (f" Head to head: {hc.coach.split()[-1]} {int(r.wins)}-{int(r.games - r.wins)}, "
                f"average margin {r.margin:+.1f}, tempo control {r.tempo_control:+.1f} "
                "possessions (history alone hasn't predicted the next meeting).")  # fmt: skip
+    else:
+        rec = " No regular-season meetings between them on record."
     flag = " (last season's coach; this season's records aren't published yet)" \
         if hc.assumed or ac.assumed else ""  # fmt: skip
     st.caption(f"Coaches: {ac.coach} ({short_team(away, season)}) vs {hc.coach} "

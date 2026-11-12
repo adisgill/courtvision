@@ -70,7 +70,7 @@ live game_id="":
 
 # coaches of every game, then coaching analytics from play-by-play
 coaching:
-    uv run courtvision ingest coaches
+    uv run courtvision ingest coaches --fetch-current
     uv run courtvision coaching
 
 # walk-forward test of game and player predictions (+ coach value, coach vs coach)

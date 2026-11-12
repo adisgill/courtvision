@@ -117,15 +117,24 @@ def render(con, team_label, mode: str, goto) -> None:
 
     # ---- 2. the season's coaches ---------------------------------------------------------
     seasons = sorted(prof[prof.season > 0].season.unique(), reverse=True)
-    complete = [s for s in seasons if not prof[prof.season == s].assumed.any()]
-    default = seasons.index(complete[0]) if complete else 0
+    # default: the latest season far enough along to read (60+ games for some coach)
+    full = [s for s in seasons if prof[prof.season == s].games.max() >= 60
+            and not prof[prof.season == s].assumed.any()]  # fmt: skip
+    default = seasons.index(full[0]) if full else 0
     season = st.selectbox("Season", seasons, index=default, key="c_season",
                           format_func=lambda s: f"{s}-{(s + 1) % 100:02d}")  # fmt: skip
     cur = prof[(prof.season == season) & (prof.games >= 10)].copy()
     if cur.assumed.any():
-        st.info("This season's coaches aren't in the source records yet: each team is shown "
-                "with the coach who finished last season, so a summer hire is credited to "
-                "his predecessor.")  # fmt: skip
+        st.info(
+            "This season's coaches aren't in the source records yet: each team is shown "
+            "with the coach who finished last season, so a summer hire is credited to "
+            "his predecessor. `courtvision ingest coaches --fetch-current` fixes it."
+        )
+    elif season == seasons[0] and _has(con, "current"):
+        as_of = D.q(con, "select max(as_of) d from coach.current").d.iloc[0]
+        if as_of:
+            st.caption(f"This season's coaches from Basketball-Reference's season page of "
+                       f"{as_of}. Early-season numbers rest on few games.")  # fmt: skip
     cur["pace_rel"] = cur.pace
     cur["team"] = cur.team_ids.map(lambda ids: ", ".join(team_label(i, season).split()[-1]
                                                          for i in ids))  # fmt: skip

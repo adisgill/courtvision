@@ -894,8 +894,15 @@ Basketball-Reference's coach records in Kaggle `deocheng/nba-data-1946-2026`
 coaches is split at the game where each coach's record matches the team's results in
 order (every order of the stints is tried). 71,404 team-games, 190 coaches; 12
 team-seasons whose records don't add up give every game to the main coach. The current
-season isn't in the records yet: each team keeps last season's final coach, flagged
-`assumed` (a summer hire is credited to his predecessor until the source updates).
+season isn't in those records yet: it comes from Basketball-Reference's season coaches
+page (`courtvision ingest coaches --fetch-current`; one request, approved by the user
+2026-11-12; cached under `data/raw/coaches/bbref_current/<date>/`; plain `build` reuses
+the cache and never fetches), split the same way, with the stint still running allowed to
+extend past the last game in the data. `coach.current` holds each team's coach now. With
+no page cached, each team keeps last season's final coach, flagged `assumed`;
+`assignments.source` says which (`records`, `current page`, `assumed`). The 2026-11-12
+page corrected four summer hires the fallback had wrong (Dallas, Milwaukee, Orlando,
+Portland).
 
 **15.2 Metrics** (`courtvision coaching` → `coach.possessions`, `coach.timeouts`,
 `coach.team_games`, `coach.profiles` per coach-season and career (`season = 0`),

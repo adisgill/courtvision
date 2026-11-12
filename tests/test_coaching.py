@@ -23,6 +23,41 @@ def test_split_games_none_when_records_do_not_add_up():
     assert split_games([1, 1, 1], [("a", 1, 0), ("b", 2, 2)]) is None  # wins never match
 
 
+def test_split_games_partial_for_a_season_in_progress():
+    # the page counts 7 games (a: 3-1, then b: 1-2); the data has only the first 6
+    wins = [1, 1, 0, 1, 1, 0]
+    out = split_games(wins, [("b", 3, 1), ("a", 4, 3)], partial=True)
+    assert out == ["a", "a", "a", "a", "b", "b"]
+    assert split_games(wins, [("b", 3, 1), ("a", 4, 3)]) is None  # not without partial
+    # one coach, page a game ahead of the data
+    assert split_games([1, 0], [("c", 3, 2)], partial=True) == ["c", "c"]
+    # data with more losses than the page allows can't be his
+    assert split_games([0, 0], [("c", 3, 2)], partial=True) is None
+
+
+PAGE = """<html><table class="sortable stats_table" id="NBA_coaches"><thead><tr>
+<th data-stat="coach">Coach</th></tr></thead><tbody>
+<tr><th data-stat="coach"><a href='/coaches/maydu99c.html'>Dusty May</a></th>
+<td data-stat="team"><a href='/teams/DAL/2027.html'>DAL</a></td>
+<td data-stat="cur_g">11</td><td data-stat="cur_w">7</td><td data-stat="cur_l">4</td>
+<td data-stat="car_g">11</td></tr>
+<tr class="thead"><th data-stat="coach">Coach</th></tr>
+<tr><th data-stat="coach"><a href='/coaches/newco01c.html'>New Coach</a></th>
+<td data-stat="team"><a href='/teams/MIL/2027.html'>MIL</a></td>
+<td data-stat="cur_g"></td><td data-stat="cur_w"></td><td data-stat="cur_l"></td></tr>
+</tbody></table></html>"""
+
+
+def test_parse_season_coaches_page():
+    from courtvision.ingest.bbref_coaches import parse
+
+    df = parse(PAGE)
+    assert df.coach_id.tolist() == ["maydu99c", "newco01c"]
+    assert df.team_abbr.tolist() == ["DAL", "MIL"]
+    assert df.iloc[0][["g", "wins", "losses"]].tolist() == [11, 7, 4]
+    assert df.iloc[1].g == 0  # hired, no games yet
+
+
 def _tg(rows):
     return pd.DataFrame(rows, columns=["game_id", "season", "team_id", "poss", "coach_id"])
 
@@ -91,4 +126,11 @@ def test_built_coach_tables():
              and a.coach_id is null"""
     ).fetchall()[0][0]
     assert missing == 0
+    # one current coach per team
+    try:
+        sql = "select count(*), count(distinct team_id) from coach.current"
+        n, teams = con.execute(sql).fetchall()[0]
+        assert n == teams == 30
+    except duckdb.CatalogException:
+        pass
     con.close()
