@@ -584,38 +584,40 @@ def player_view() -> None:
             "Impact (band ± 1 se) combines the plus-minus regression with two "
             "starting points: last season's impact and what the box score says."
         )
+    advanced_panel(pid, season, mode)
     if D.has_market(con):
         mk = D.q(con, "select * from market.players where person_id = ?", [pid])
-        pr = D.q(con, "select * from market.params")
-        if not mk.empty and pd.notna(mk.impact.iloc[0]) and not pr.empty:
-            m, p = mk.iloc[0], pr.iloc[0]
-            st.subheader(f"Market ({season_label(int(m.season))})")
+        if not mk.empty and pd.notna(mk.impact.iloc[0]):
+            m = mk.iloc[0]
+            st.subheader(f"Contract and market ({season_label(int(m.season))})")
             c = st.columns(4)
-            c[0].metric("Salary", f"${m.salary / 1e6:.1f}M" if pd.notna(m.salary)
-                        else "unsigned")  # fmt: skip
-            c[1].metric("Estimated fair salary", f"${m.fair_salary / 1e6:.1f}M")
+            sal = (f"${m.salary / 1e6:.1f}M" if pd.notna(m.salary)
+                   else "unknown" if m.contract_kind == "unknown" else "unsigned")  # fmt: skip
+            c[0].metric("Salary", sal)
+            c[1].metric("Estimated fair salary", f"${m.fair_salary / 1e6:.1f}M",
+                        help="Market comparables: his rank in value (points above replacement "
+                        "from per-possession impact) priced at the same rank of veteran "
+                        f"salaries, capped at his max ({100 * m.max_share:.0f}% of the cap for "
+                        f"{m.service:.0f} years of service). From the box score alone: "
+                        f"${m.fair_box / 1e6:.1f}M.")  # fmt: skip
             c[2].metric("Wins above replacement", f"{m.war:.1f}",
                         help=f"Bad / good case: {m.war_p10:.1f} / {m.war_p90:.1f}")  # fmt: skip
-
-            def fair(w: float) -> float:
-                return min(p.vet_min + max(w, 0) * p.dollars_per_win, p.max_salary) / 1e6
-
             c[3].metric("Risk", m.risk)
-            marks = {"fair": m.fair_salary / 1e6}
+            status = m.status if isinstance(m.status, str) else "—"
+            if pd.notna(m.through) and "unknown" not in status and m.contract_kind == "contract":
+                status += (f"; runs through {season_label(int(m.through))} "
+                           f"({int(m.years_left)} season(s), "
+                           f"${(m.total_left or 0) / 1e6:.0f}M left)")  # fmt: skip
+            st.caption(f"**Contract:** {status}.")
             if pd.notna(m.salary):
                 st.plotly_chart(
-                    C.bullet(
-                        m.salary / 1e6,
-                        marks,
-                        mode,
-                        band=(fair(m.war_p10), fair(m.war_p90)),
-                        label="salary",
-                    ),
-                    width="stretch",
-                    key="p_bullet",
-                )
-                st.caption("Bar: salary. Line: estimated fair salary; band: its bad-to-good "
-                           "range from the impact uncertainty.")  # fmt: skip
+                    C.bullet(m.salary / 1e6,
+                             {"fair": m.fair_salary / 1e6, "box-score view": m.fair_box / 1e6},
+                             mode, band=(m.fair_p10 / 1e6, m.fair_p90 / 1e6), label="salary"),
+                    width="stretch", key="p_bullet",
+                )  # fmt: skip
+                st.caption("Bar: salary. Lines: fair salary from impact, and from the box score "
+                           "alone; band: the impact-based price's bad-to-good range.")  # fmt: skip
             if m.risk_flags is not None and len(m.risk_flags):
                 st.caption("Risk factors: " + "; ".join(m.risk_flags))
     st.subheader("Shot zones")
@@ -632,6 +634,64 @@ def player_view() -> None:
                         key="p_log")  # fmt: skip
 
 
+ADVANCED = [  # NBA.com's advanced player table: (column, label, format, higher is better)
+    ("off_rating", "Offensive rating", "{:.1f}", True), ("def_rating", "Defensive rating",
+                                                           "{:.1f}", False),
+    ("net_rating", "Net rating", "{:+.1f}", True), ("ts_pct", "True shooting %", "{:.1%}", True),
+    ("efg_pct", "Effective FG %", "{:.1%}", True), ("usg_pct", "Usage %", "{:.1%}", None),
+    ("ast_pct", "Assist %", "{:.1%}", True), ("ast_to", "Assist / turnover", "{:.2f}", True),
+    ("ast_ratio", "Assist ratio", "{:.1f}", True), ("tov_ratio", "Turnover ratio", "{:.1f}",
+                                                      False),
+    ("oreb_pct", "Off. rebound %", "{:.1%}", True), ("dreb_pct", "Def. rebound %", "{:.1%}", True),
+    ("reb_pct", "Rebound %", "{:.1%}", True), ("pace", "Pace", "{:.1f}", None),
+    ("pie", "PIE (NBA.com)", "{:.1%}", True),
+]  # fmt: skip
+
+
+def advanced_panel(pid: int, season: int, mode: str) -> None:
+    """NBA.com's advanced stats, each against the league as a percentile bar."""
+    con = _con()
+    lg = D.q(con, """select * from metrics.player_advanced where season = ? and team_id = 0
+                     and season_type = 'regular' and possessions >= 1000""", [season])  # fmt: skip
+    me = D.q(con, """select * from metrics.player_advanced where season = ? and team_id = 0
+                     and season_type = 'regular' and person_id = ?""", [season, pid])  # fmt: skip
+    if me.empty or lg.empty:
+        return
+    me = me.iloc[0]
+    st.subheader("Advanced stats (NBA.com set)")
+    rows = []
+    for col, label, fmt, up in ADVANCED:
+        v = me.get(col)
+        if v is None or pd.isna(v):
+            continue
+        pct = float((lg[col] < v).mean() * 100)
+        good = pct if up is not False else 100 - pct
+        rows.append((label, fmt.format(v), pct, good, up))
+    t = C.THEME[mode]
+    # bar length = share of players he is better than (style stats: plain percentile)
+    fig = go.Figure(go.Bar(
+        y=[r[0] for r in rows], x=[r[2] if r[4] is None else r[3] for r in rows],
+        orientation="h", marker_cornerradius=4,
+        marker_color=[t["bar"] if r[4] is None else C.good_bad(r[3] - 50, 50, mode)
+                      for r in rows],
+        text=[f"{r[1]}  ·  " + (f"{r[2]:.0f}th percentile" if r[4] is None
+                                else f"better than {r[3]:.0f}%") for r in rows],
+        textposition="outside",
+        cliponaxis=False, textfont={"color": t["ink2"], "size": 11},
+        hovertemplate="%{y}: %{text}<extra></extra>",
+    ))  # fmt: skip
+    fig.add_vline(x=50, line_color=t["muted"], line_width=1)
+    C.base_layout(fig, 26 * len(rows) + 60, yaxis={"autorange": "reversed"},
+                  xaxis={"range": [0, 125],
+                         "title": "% of players with 1,000+ possessions he beats"})  # fmt: skip
+    st.plotly_chart(fig, width="stretch", key="p_adv")
+    st.caption("Computed from our play-by-play counts and lineups (validated against NBA.com's "
+               "own numbers: ratings, usage and assist rate agree at r 0.99+). Longer bars are "
+               "better (for defensive rating and turnover ratio, lower numbers beat more "
+               "players); blue above the median, red below; gray: style, not quality (usage, "
+               "pace). PIE is NBA.com's official figure.")  # fmt: skip
+
+
 def live_view() -> None:
     from courtvision.app import live_page
 
@@ -644,8 +704,15 @@ def market_view() -> None:
     market_page.render(_con(), team_label, _theme(), goto)
 
 
-VIEWS = {"League": league_view, "Team": team_view, "Game": game_view, "Player": player_view,
-         "Market": market_view, "Live": live_view}  # fmt: skip
+def upcoming_view() -> None:
+    from courtvision.app import upcoming_page
+
+    upcoming_page.render(_con(), team_label, short_team, _players(), _theme(), goto)
+
+
+VIEWS = {"League": league_view, "Upcoming": upcoming_view, "Team": team_view,
+         "Game": game_view, "Player": player_view, "Market": market_view,
+         "Live": live_view}  # fmt: skip
 
 st.sidebar.title("courtvision")
 choice = st.sidebar.radio("View", list(VIEWS), key="view")
