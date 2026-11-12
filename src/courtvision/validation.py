@@ -25,8 +25,8 @@ from courtvision.metrics import rate
 FIRST, LAST = 1996, 2025  # complete play-by-play seasons used for team validation
 
 COMPONENTS = [
-    "shooting_sq", "shooting_sm", "defense_dq", "defense_dm", "defense_dt", "defense_df",
-    "defense_dr", "ball_bt", "ball_bo",
+    "shooting_sq", "shooting_sm", "shooting_fd", "shooting_fm", "defense_dq", "defense_dm",
+    "defense_dt", "defense_df", "defense_dr", "ball_bt", "ball_bo",
 ]  # fmt: skip
 
 
@@ -211,6 +211,8 @@ def _nba_team_seasons(con, first: int = FIRST, last: int = LAST) -> pd.DataFrame
                -- per 100 possessions, so every part is on the net-rating scale
                v.shooting_sq_value * c.fga / c.poss as shooting_sq,
                v.shooting_sm_value * c.fga / c.poss as shooting_sm,
+               v.shooting_fd_value * c.b_fga / c.poss as shooting_fd,
+               v.shooting_fm_value * c.b_fga / c.poss as shooting_fm,
                v.ball_bt_value * c.b_plays / c.poss as ball_bt,
                v.ball_bo_value as ball_bo,
                v.defense_dq_value as defense_dq, v.defense_dm_value as defense_dm,
@@ -224,7 +226,7 @@ def _nba_team_seasons(con, first: int = FIRST, last: int = LAST) -> pd.DataFrame
         window w as (partition by t.season)
     """).df()
     df["net_rel"] = df.ortg_rel - df.drtg_rel
-    df["offense"] = df[["shooting_sq", "shooting_sm", "ball_bt", "ball_bo"]].sum(axis=1)
+    df["offense"] = df[[c for c in COMPONENTS if not c.startswith("defense")]].sum(axis=1)
     df["defense"] = df[[c for c in COMPONENTS if c.startswith("defense")]].sum(axis=1)
     df["total"] = df.offense + df.defense
     return df
@@ -325,6 +327,56 @@ def nba_agreement(con) -> dict[str, pd.DataFrame]:
     return {"fit": fit, "weights": weights, "players": players}
 
 
+def impact_check(con) -> pd.DataFrame:
+    """Does last season's per-player number predict this season's team net rating?
+
+    Each team-season's prediction is the sum over its players of last season's estimate
+    times this season's share of the team's possessions (the five shares sum to 5).
+    Players with no estimate last season get the newcomer prior (impact) or 0 (on/off).
+    """
+    df = con.sql(f"""
+        with share as (
+            select season, team_id, person_id, sum(poss) as poss
+            from metrics.player_game_counts
+            where season_type = 'regular' and poss is not null group by all
+        ),
+        team as (
+            select season, team_id, sum(poss) as poss,
+                   100 * (sum(pts_fg + ftm) - sum(o_pts_fg + o_ftm)) / sum(poss) as net
+            from metrics.team_game_counts
+            where season_type = 'regular' and pbp_ok group by all
+        ),
+        onoff as (
+            select season, person_id, arg_max(presence_value, minutes_on) as v
+            from metrics.presence_season where season_type = 'regular' group by all
+        ),
+        newc as (select newcomer_off + newcomer_def as v
+                 from metrics.impact_lambda where mode = 'prior_informed')
+        select s.season, s.team_id, any_value(t.net) as net,
+               sum(s.poss / t.poss * coalesce(i.impact, (select v from newc)))
+                   as from_impact,
+               sum(s.poss / t.poss * coalesce(i.season_only, 0)) as from_season_only,
+               sum(s.poss / t.poss * coalesce(o.v, 0)) as from_on_off
+        from share s
+        join team t using (season, team_id)
+        left join metrics.player_impact i
+          on i.person_id = s.person_id and i.season = s.season - 1
+        left join onoff o on o.person_id = s.person_id and o.season = s.season - 1
+        where s.season between {FIRST + 1} and {LAST}
+        group by s.season, s.team_id
+    """).df()
+    rows = []
+    for col, label in (("from_impact", "impact (prior-informed adjusted plus-minus)"),
+                       ("from_season_only", "season-only adjusted plus-minus"),
+                       ("from_on_off", "raw on/off (old Presence)")):  # fmt: skip
+        r = df[col].corr(df.net)
+        rows.append({"last season's number": label, "r with this season's net rating": r,
+                     "r²": r**2})  # fmt: skip
+    out = pd.DataFrame(rows)
+    out.attrs["team_seasons"] = len(df)
+    return out
+
+
 def _md_table(df: pd.DataFrame, floatfmt: str = ".3f") -> str:
     cols = list(df.columns)
     lines = ["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
@@ -346,6 +398,8 @@ def report(con) -> str:
     tiers = tier_agreement(con)
     scale = scale_summary(con)
     nba = nba_agreement(con)
+    imp = impact_check(con)
+    lam = con.sql("select * from metrics.impact_lambda").df()
     head = [c for c in pers.measure if c in (*M.HEADLINE, *COMPONENTS, "net_rtg", *FOUR_FACTORS)]
     parts = [
         "# Validation",
@@ -422,6 +476,19 @@ def report(con) -> str:
         f"{nba['players'].attrs['r2_pie_both']:.2f}.",
         "",
         _md_table(nba["players"]),
+        "",
+        "## 7. Per-possession impact (adjusted plus-minus)",
+        "",
+        "Ridge strength chosen by 5-fold cross-validation over games (`metrics.impact_cv`):",
+        "",
+        _md_table(lam, ".1f"),
+        "",
+        "Out of sample: last season's player numbers, weighted by this season's possession "
+        f"shares, against this season's team net rating ({imp.attrs['team_seasons']} "
+        "team-seasons). Nothing from the predicted season enters the predictors except who "
+        "played how much.",
+        "",
+        _md_table(imp),
         "",
     ]
     return "\n".join(parts)

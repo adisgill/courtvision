@@ -10,14 +10,19 @@ across six dimensions:
 | 3 | Ball control | How often do possessions end in a shot rather than a turnover? |
 | 4 | Backcourt    | Dimensions 1–3 restricted to guards and perimeter zones |
 | 5 | Frontcourt   | Dimensions 1–3 restricted to forwards/centers and the paint |
-| 6 | Presence     | How much do the team's ratings move when a given player is on the floor? |
+| 6 | Presence     | How many points per 100 possessions does a player add, adjusted for who he plays with and against? |
 
 Ratings exist at three levels — player → game → team/season — and are always
 **era-adjusted**: every number is rated against league average for its own
-season, never compared across eras raw.
+season, never compared across eras raw. Team ratings also come **opponent-adjusted**.
 
-> Status: **v1.0 ratings built** for every season from 1974-75 (box-score tiers) and
-> 1996-97 (play-by-play), with a validation report, a visualizer and a live mode.
+On top of the ratings, a **player market** prices every player (wins above
+replacement from per-possession impact, in dollars), reads each team's payroll
+against the cap, tax and aprons, finds where each team is short, and lists the
+players who would fix it, with what they cost and how risky they are.
+
+> Status: **v1.1** for every season from 1974-75 (box-score tiers) and 1996-97
+> (play-by-play), with a validation report, a visualizer, a live mode and the market.
 >
 > * [`docs/metrics_spec.md`](docs/metrics_spec.md): formulas, scaling, roll-ups, tiers, acceptance tests
 > * [`docs/validation.md`](docs/validation.md): stabilization, persistence, signal beyond Four Factors
@@ -32,6 +37,10 @@ season, never compared across eras raw.
    and rotations (used to validate the Kaggle data and the lineup reconstruction), and
    the live feed for live mode. Requests are rate-limited and every raw response is
    cached to disk.
+3. **Kaggle** — [`mrbridge/nba-salary-cap-contracts-2016-2026`](https://www.kaggle.com/datasets/mrbridge/nba-salary-cap-contracts-2016-2026)
+   (attribution: MrBridge, mr-bridge.com; research and educational use): player
+   salaries (a HoopsHype snapshot of 2026-07-07), payrolls, and cap / tax / apron
+   levels. Used only by the market model.
 
 No player-tracking data is used; none is public.
 
@@ -45,9 +54,11 @@ uv sync
 cp .env.example .env                              # then put your Kaggle API token in it
 uv run courtvision ingest kaggle                  # download (~1.1 GB) + load (~1 min)
 uv run courtvision ingest nba-api --season 2025   # optional: ~1 h cold, for validation (T3, T6)
-uv run courtvision metrics build                  # every rating, all seasons (~7 min)
+uv run courtvision metrics build                  # every rating, all seasons (~9 min)
+uv run courtvision ingest salaries                # salaries + cap thresholds (seconds)
+uv run courtvision market build                   # value, budgets, needs, options
 uv run courtvision validate                       # regenerate docs/validation.md
-uv run courtvision app                            # visualizer: team / game / player / live
+uv run courtvision app                            # team / game / player / market / live
 uv run courtvision live                           # today's games; --game-id X rates one
 ```
 
@@ -70,7 +81,9 @@ order by defense_rating desc;
 | `kaggle.*` | one view per Kaggle file, columns untouched | `ingest kaggle-load` |
 | `nba_api.*` | `game_log`, `shots`, `pbp`, `rotations`, `shot_zone_league_avg` | `ingest nba-api` |
 | `stg.*` | conformed keys (10-char `game_id`, `season`, `season_type`) and documented repairs: `games`, `players`, `player_games`, `team_games`, `pbp`, `shots`, `events` | `ingest kaggle-load` |
-| `metrics.*` | possessions, lineups, counts, league baselines, ratings (`team_game`, `team_season`, `player_game`, `player_season`, `presence_season`, `ratings_long`, ...); see spec section 7 | `metrics build` |
+| `metrics.*` | possessions, lineups, counts, league baselines, ratings (`team_game`, `team_season`, `player_game`, `player_season`, `presence_season`, `ratings_long`, ...), `player_impact` (per-possession impact), `team_season_adj` (opponent-adjusted), `player_role` (usage); see spec section 7 | `metrics build` |
+| `salary.*` | `contracts` (salaries matched to NBA ids), `cap`, `min_salaries`, `team_payrolls`, ... | `ingest salaries` |
+| `market.*` | `players` (value, price, risk), `teams` (budget, needs), `options`, `params` | `market build` |
 
 Parquet under `data/parquet/` is the durable copy; the DuckDB file holds views
 over it and rebuilds in seconds. Raw downloads and every nba_api response
@@ -84,6 +97,7 @@ src/courtvision/   library + CLI (`courtvision ...`)
   metrics/         play-by-play parser (possessions, lineups), counts, measures, ratings
   app/             Streamlit visualizer
   live.py          live-game ratings from the NBA live feed
+  market.py        player value, team budgets and needs, options and risk
   validation.py    generates docs/validation.md
   audit.py         generates docs/audit/*
 notebooks/         validation notebook (same numbers as docs/validation.md)

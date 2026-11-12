@@ -1,10 +1,12 @@
 # Metrics spec
 
-**Status: v1.0, approved 2026-11-12 with every recommended decision (D1–D9).**
-Implemented in `src/courtvision/metrics/`; `uv run courtvision metrics build`
-reproduces every number. Section 10 records what implementation added or
-settled beyond the draft; section 8 has the acceptance-test results. Grounded in
-[`data_audit.md`](data_audit.md).
+**Status: v1.1.** v1.0 approved 2026-11-12 with every recommended decision
+(D1–D9); v1.1 (free throws, fouls valuation, role, per-possession impact, opponent
+adjustment, market model) approved the same day, see [section 11](#11-v11-2026-11-12).
+Implemented in `src/courtvision/metrics/` and `src/courtvision/market.py`;
+`uv run courtvision build` reproduces every number. Section 10 records what
+implementation added or settled beyond the draft; section 8 has the
+acceptance-test results. Grounded in [`data_audit.md`](data_audit.md).
 
 Contents: [0 Decisions](#0-decisions) ·
 [1 Conventions](#1-conventions) · [2 Scale](#2-the-0100-scale) ·
@@ -12,7 +14,7 @@ Contents: [0 Decisions](#0-decisions) ·
 [4 Shrinkage](#4-small-sample-shrinkage) · [5 Dimensions](#5-the-six-dimensions) ·
 [6 Availability](#6-availability-by-era) · [7 Outputs & CLI](#7-outputs-and-the-cli) ·
 [8 Acceptance tests](#8-acceptance-tests) · [9 Out of scope](#9-out-of-scope-for-v1) ·
-[10 Implementation notes](#10-implementation-notes-v10)
+[10 Implementation notes](#10-implementation-notes-v10) · [11 v1.1](#11-v11-2026-11-12)
 
 ---
 
@@ -24,7 +26,7 @@ record of what was decided and why.
 | # | Decision | Options | Recommendation |
 |---|---|---|---|
 | D1 | **0–100 mapping** | (a) `50 + 10·z`, clipped: 50 = league average, ±10 = ±1 SD; (b) percentile within season | **(a)**. Keeps magnitude, so "+8 tonight" means the same thing every season, and deltas are meaningful for the in-game use case. Percentiles flatten the tails and make deltas depend on where you start. |
-| D2 | **Free throws in Shooting** | (a) Shooting is field goals only (decomposes eFG%); (b) include FT trips (decomposes TS%) | **(a)**. The brief defines Shooting by court zone; FTs have no zone. FT *allowed* is in Defense; offensive FT rate is reported as a supporting stat. |
+| D2 | **Free throws in Shooting** | (a) Shooting is field goals only (decomposes eFG%); (b) include FT trips (decomposes TS%) | **(a)**. The brief defines Shooting by court zone; FTs have no zone. FT *allowed* is in Defense; offensive FT rate is reported as a supporting stat. **Superseded in v1.1 (section 11.1):** free throws join Shooting as two separate components, valued net of the shot they replace. |
 | D3 | **Rebounding** | Not in any dimension as briefed. (a) leave out; (b) DREB% as a Defense component, OREB% as a Ball-control component | **(b)**, as separately reported components that can be switched off. Without it, Defense ignores ending the opponent's possession and the validation against Four Factors starts with a known hole. |
 | D4 | **What "restricted to guards / perimeter zones" means** for Backcourt/Frontcourt | (a) position filter only; (b) zone filter only; (c) both at once; (d) **offense by position, defense by zone** | **(d)**. Offense events have a known actor, so a guard's shots and turnovers are backcourt offense (all zones, drives included). Defense has no known defender without tracking, so backcourt defense = opponent *perimeter* shots allowed, frontcourt defense = opponent *paint* shots allowed. |
 | D5 | **Multi-position players** (G-F, F-C flags) | (a) fractional: weight = flag share; (b) first flag wins; (c) per-game `startingPosition` for starters | **(a)**. G-F counts ½ backcourt, ½ frontcourt; F-C counts fully frontcourt. Weights sum to 1, so roll-ups stay exact. Flags are career-level, a known limitation. |
@@ -389,8 +391,8 @@ from box plus/minus and minutes:
 Box plus/minus starts in 1996-97, so this covers the same era and serves only
 as a fallback and cross-check. **Not computable before 1996-97.**
 
-Out of scope for v1: regularized adjusted plus-minus (RAPM), which controls
-for teammates and opponents. It's the natural v2 of Presence.
+**v1.1:** the Presence rating is now per-possession impact (regularized adjusted
+plus-minus, section 11.4); the on/off measures above remain as supporting detail.
 
 ## 6. Availability by era
 
@@ -442,6 +444,10 @@ Tables (schema `metrics`, also written to `data/parquet/metrics/`):
 | `presence_season`, `presence_rolling` | player × team × season / last 10 and 20 games | Δ per dimension, composite, rating (season), box net on/off |
 | `lineup_qa_summary`, `stat_first_season` | season / stat | lineup and play-by-play QA rates; D9 availability |
 | `build_info` | one row | git commit, Kaggle download time, spec version, tier start seasons |
+| `player_impact`, `impact_lambda`, `impact_cv` | player × season / mode | per-possession impact (v1.1, 11.4) and its cross-validation |
+| `team_season_adj` | team × season × tier × measure | schedule effect, opponent-adjusted value and rating (11.5) |
+| `player_role` | player × team × season | usage, assist rate (11.3) |
+| `market.players`, `market.teams`, `market.options`, `market.params` | player / team / option | value, price and risk; budgets and needs; options; parameters (11.6) |
 
 `build_info` ties every rating to the exact code and data snapshot that
 produced it.
@@ -462,7 +468,8 @@ Before any rating is trusted:
 
 ## 9. Out of scope for v1
 
-Opponent-strength adjustment, RAPM, shot-type-aware expected points
+(Opponent-strength adjustment and RAPM were added in v1.1, section 11.)
+Shot-type-aware expected points
 (e.g. dunk vs layup within the RA; `subType` is available, so this is an easy v2
 for Shooting), shot-clock context, and anything needing player-tracking data.
 **No metric here needs player (x, y) positions:** zones come from shot
@@ -575,3 +582,140 @@ hard-coded, and they reproduce section 6:
 **Shrinkage.** `k` is solved at the half-season exposure from `r = n_h / (n_h + k)`,
 which is algebraically the Spearman-Brown route in section 4. A measure whose
 halves don't correlate positively is shrunk fully to league average.
+
+## 11. v1.1 (2026-11-12)
+
+Approved by the user on 2026-11-12 ("add them all") after validation against
+NBA.com's ratings ([`validation.md`](validation.md) section 6) found two valuation
+gaps. v1.1 adds five things to the ratings and a market model on top of them.
+
+### 11.1 Free throws in Shooting (supersedes D2)
+
+D2 kept Shooting to field goals. Validation showed what that costs: the offense
+parts explained 93% of NBA.com's offensive rating without free throws and 98%
+with them. Shooting gains two components, from box-score counts so every tier has
+them (per 100 FGA, like `SQ` and `SM`):
+
+| Component | Formula |
+|---|---|
+| Drawing fouls `FD` | `100 · (FTA − lgFTr_s · FGA) / FGA · (lgFT%_s − ½ · lgPPS_s)` |
+| Free-throw making `FM` | `100 · (FTM − lgFT%_s · FTA) / FGA` |
+| **Shooting** | `SQ + SM + FD + FM` (tier B: two-class `SQ`/`SM`; tier C: FG gap) |
+
+**Why `lgFT% − ½·lgPPS`.** A trip to the line mostly *replaces* a shot: a
+two-shot foul ends the possession without the field-goal attempt that was fouled.
+An extra FTA is therefore worth its make rate minus half a league shot (two FTA per
+replaced attempt), about 0.26 points rather than the 0.77 of a plain make rate.
+And-ones and three-shot fouls move this slightly. Backcourt / Frontcourt gain the
+same parts on their position-weighted counts (`ft`, per 100 possessions), and the
+box tier B of both includes them.
+
+### 11.2 Fouls valued net of the replaced shot (Defense `DF`)
+
+v1.0 valued every free throw allowed at `lgFT%`. Regressing NBA.com's net rating
+on the components gave `DF` a weight of 0.27 while every other part sat between
+0.83 and 1.10. `DF` now uses the same net value as `FD`:
+
+`DF = 100 · r · (lgFTr − oFTA/oFGA) · (lgFT% − ½ · lgPPS)`
+
+The player foul parts of Backcourt / Frontcourt (`df`) are scaled by the same
+ratio, `(lgFT% − ½·lgPPS) / lgFT%`. Presence's on/off Shooting includes free throws
+the same way.
+
+### 11.3 Role context: usage and assist rate (not rated)
+
+`metrics.player_role`, per player-season (per team and `team_id = 0`):
+`usage = (FGA + 0.44·FTA + TOV) / team's (FGA + 0.44·FTA + TOV) while on court`,
+`ast_pct = AST / teammates' FGM while on court`. Only games with rebuilt lineups,
+so both sides cover the same minutes. Not rated: high usage is a role, not a skill.
+It is shown next to the ratings because a rate stat at 30% usage and at 12% describe
+different players (validation section 6: usage alone explains 45% of NBA.com's PIE,
+the rate ratings 16%).
+
+### 11.4 Per-possession impact (adjusted plus-minus) and Presence
+
+`metrics.player_impact`, per player-season (regular season, 1996-97 on), built by
+`courtvision.metrics.impact`:
+
+* **Rows.** Every stint (a stretch with the same ten players, from the rebuilt
+  lineups, in games passing lineup QA) gives two rows, one per offense:
+  `y = 100 · points / possessions − league mean`, weight = possessions.
+* **Model.** `y = Σ off(5 offensive players) + Σ def(5 defensive players) + h · site`.
+  Ridge regression shrinks each coefficient toward a prior:
+  * `season_only`: prior 0, this season alone;
+  * `impact` (headline): prior = the player's estimate after the previous season,
+    or the average newcomer for a player new to the league. Seasons are fitted in
+    order, so each estimate carries every earlier season's evidence.
+* **Ridge strength** `λ` (in possessions) is chosen per mode by 5-fold
+  cross-validation over games on 2004, 2009, 2014, 2019 and 2024
+  (`metrics.impact_cv`, `metrics.impact_lambda`).
+* **Outputs** (points per 100 possessions, positive = good, defense negated):
+  `impact_off`, `impact_def`, `impact`, `impact_se` (ridge posterior), `season_only`,
+  `points_added = (off·poss_off + def·poss_def) / 100`, and `impact_rating`
+  (50 + 10·z among players with ≥ 2,000 possessions × season fraction,
+  possession-weighted).
+* **Presence** (the sixth dimension) is now `impact_rating`. The v1.0 on/off
+  measures stay in `presence_season` as supporting detail: on/off is what the team
+  did with the player on the floor; impact is how much of that was him.
+
+**Per possession, not per minute.** Impact is per 100 possessions so that players on
+fast and slow teams compare fairly; `points_added` gives the season total, and the
+app also shows it per 36 minutes.
+
+### 11.5 Opponent-adjusted team ratings
+
+`metrics.team_season_adj`, per team-season (regular season), every measure and tier
+(`courtvision.metrics.adjust`). For each season × measure × tier:
+`value(team, game) = μ + a[team] + b[opponent] + h·(±1 site)` by least squares
+(ridge 1e-3 to pin the constant). A team's **schedule effect** is the mean of
+`b[opponent] + h·site` over its games; `value_adj = value − schedule`, rated on the
+same team-season reference as the raw value (`rating_adj`). Raw values remain the
+default; the app has a toggle.
+
+### 11.6 Market model
+
+`courtvision ingest salaries` loads the salary dataset (README, data sources) into
+`salary.*` and matches HoopsHype players to NBA ids by normalized name, using who
+played for whom that season to break ties. `courtvision market build` writes
+`market.*` for the latest salary season. All money is in that season's dollars.
+
+* **Points per win**: from team-seasons 2000 on, `1 / slope(win% ~ point margin per
+  game)`.
+* **Replacement level**: possession-weighted impact of last season's players paid at
+  most 1.05 × the veteran minimum (≥ 500 possessions).
+* **Value**: `WAR = (impact − replacement) · projected possessions / 100 / points
+  per win`. Projected possessions = 0.7 × last season + 0.3 × this season's pace
+  (or whichever exists). Current impact = this season's prior-informed estimate.
+* **$ per win**: last season's salary above the veteran minimum, summed, over last
+  season's positive WAR, summed; inflated to this season by the cap ratio.
+  **Fair salary** = veteran minimum + max(WAR, 0) × $/win, capped at 35% of the cap.
+* **Risk** per player: `war_p10` / `war_p90` from the impact standard error;
+  `overpay_prob = P(fair salary < salary)` under that error; flags for age (aging
+  curve fitted on season-only estimates by the delta method; flagged at ≤ −0.75
+  pts/100 expected next season), availability (< 70% of team games over two
+  seasons), uncertainty (se ≥ 2.5), small role (< 2,000 projected possessions),
+  player option, two-way contract. **High** if `overpay_prob ≥ 0.75` or two or more
+  flags (a player option doesn't count); **low** if `overpay_prob < 0.35` and no
+  flag; otherwise medium.
+* **Budgets**: payroll (sum of the season's salaries) against cap, tax line, first
+  and second apron; status; room to each; luxury tax at non-repeater rates (1.50,
+  1.75, 2.50, 3.25, then +0.50 per step, the step scaled with the cap from $5.168M
+  in 2023-24). Repeater rates, cap holds, exceptions and dead-money mechanics are
+  not modelled.
+* **Needs**: the team's dimensions rated below 47 opponent-adjusted this season
+  (the weakest one if none is), up to three.
+* **Options**: for each need, players on other teams (or unsigned with ≥ 800
+  possessions last season, priced at the veteran minimum) rated ≥ 58 in that
+  dimension whose impact beats the weakest of the team's nine most-used players in
+  the same position group. `net_gain = (impact − replaced impact) × the share of
+  team minutes the candidate usually plays` (capped at 80%); `wins_added = net_gain
+  × team possessions / 100 / points per win`, plus a bad case at the candidate's
+  10th percentile. Cost: salary; the least outgoing salary that makes the trade
+  legal (2023 CBA matching, simplified: nothing within cap space; below the first
+  apron the 200% + $250k / + $7.5M / 125% + $250k bands, scaled with the cap; above
+  the first apron 100%); payroll and status after; and the change in tax. Ranked by
+  (salary + added tax) per win, twelve per need.
+
+The market is a planning aid built on public data, not a cap sheet: snapshot
+salaries miss later signings, contract years beyond the current season are not in
+the data, and the trade rules are simplified.
