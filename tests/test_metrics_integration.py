@@ -283,3 +283,39 @@ def test_backcourt_frontcourt_rated_only_for_their_players(con):
               or (r.family = 'frontcourt' and coalesce(p.w_fc, 0) < 0.5))""",
     )[0]
     assert bad == 0
+
+
+def test_live_pipeline_reproduces_history(con):
+    """A finished game rated from the cached live feed matches the historical build on
+    every shot- and possession-based measure (box-score inputs differ by design)."""
+    from courtvision import live
+
+    game_id = "0022600216"
+    try:
+        res = live.rate_game(con, game_id, offline=True)
+    except FileNotFoundError:
+        pytest.skip("no cached live feed; run `courtvision live --game-id 0022600216`")
+    hist = dict(
+        ((t, m), v)
+        for t, m, v in con.execute(
+            """select team_id, measure, value from metrics.ratings_long
+               where level = 'team_game' and tier = 'A' and game_id = ?""",
+            [game_id],
+        ).fetchall()
+    )
+    r = res["ratings"]
+    for m in ("shooting", "shooting_sq", "shooting_sm", "defense_dq", "defense_dm"):
+        for row in r[r.measure == m].itertuples():
+            assert math.isclose(row.value, hist[(row.team_id, m)], abs_tol=1e-6), (m, row)
+
+
+def test_current_season_has_player_ratings(con):
+    # season minimums scale with the share of the season played
+    season, n = one(
+        con,
+        """select season, count(rating) from metrics.ratings_long
+           where level = 'player_season' and measure = 'defense' and season_type = 'regular'
+             and season = (select max(season) from metrics.league_baselines)
+           group by season""",
+    )
+    assert n > 100, (season, n)

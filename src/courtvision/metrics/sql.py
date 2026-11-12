@@ -399,6 +399,9 @@ create or replace table metrics.league_baselines as
 select
     season,
     count(*) as team_games,
+    count(distinct team_id) as n_teams,
+    -- share of an 82-game season played: scales season qualifying minimums
+    least(1.0, count(*) / count(distinct team_id) / 82.0) as season_frac,
     -- play-by-play (tier A)
     sum(pts_r) / nullif(sum(fga_r), 0) as lg_pps,
     sum(tov) / nullif(sum(poss), 0) as lg_tovr,

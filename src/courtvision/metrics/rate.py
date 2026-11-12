@@ -282,8 +282,11 @@ def _qualify_case(level: str) -> str:
     if not level.startswith("player"):
         return "true"
     idx = 0 if level == "player_season" else 1
+    # season minimums scale with the share of the season played (in-progress and
+    # shortened seasons); game minimums don't
+    scale = " * lb.season_frac" if idx == 0 else ""
     whens = " ".join(
-        f"when '{fam}' then v.exposure >= {mins[idx]}" for fam, mins in M.QUALIFY.items()
+        f"when '{fam}' then v.exposure >= {mins[idx]}{scale}" for fam, mins in M.QUALIFY.items()
     )
     return f"case v.family {whens} else false end"
 
@@ -293,7 +296,8 @@ def ratings_sql() -> list[tuple[str, str]]:
     adjusted = f"""
     select v.level, v.season, v.season_type, v.game_id, v.team_id, v.person_id, v.tier,
            v.measure, v.family, v.value, v.exposure,
-           case when v.family = 'presence' then v.on_poss >= 1000 and v.off_poss >= 300
+           case when v.family = 'presence'
+                then v.on_poss >= 1000 * lb.season_frac and v.off_poss >= 300 * lb.season_frac
                 {qual}
                 else false end as qualifies,
            case when v.level = 'player_season'
@@ -305,7 +309,8 @@ def ratings_sql() -> list[tuple[str, str]]:
         select * from metrics.values_presence
     ) v
     left join metrics.shrinkage_constants k
-      on v.level = 'player_season' and k.tier = v.tier and k.measure = v.measure"""
+      on v.level = 'player_season' and k.tier = v.tier and k.measure = v.measure
+    left join metrics.league_baselines lb on lb.season = v.season"""
     return [
         (
             "values_presence",
