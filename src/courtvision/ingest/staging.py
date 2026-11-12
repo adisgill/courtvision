@@ -6,11 +6,22 @@ Staging does three things and nothing else:
    ``season`` (start year, e.g. 2025 for 2025-26) and ``season_type`` are
    derived from it; person/team ids are BIGINT.
 2. Rename to snake_case where we select columns explicitly.
-3. Repair documented source defects, always with a flag column saying the
-   value was repaired (see docs/data_audit.md):
-   * ``player_statistics.playerteamId`` is NULL for ~50% of 2000-01 and ~100%
-     of 2021-22 rows. Recovered from the ``home`` flag + ``games`` home/away
-     ids, which agree 100% wherever ``playerteamId`` is present.
+3. Repair documented source defects (see docs/data_audit.md), with a flag
+   column wherever a value is imputed rather than dropped:
+   * ``player_statistics.playerteamId`` is NULL for 99.9% of 2021-22 and
+     50.2% of 2000-01 regular-season rows (and <1% of a dozen other
+     seasons). Recovered from the ``home`` flag + ``games`` home/away ids,
+     which agree 100% wherever ``playerteamId`` is present; flagged by
+     ``team_id_repaired``. Only preseason/All-Star rows stay unrepaired.
+   * ``team_statistics`` has placeholder rows with ``teamId = 0`` (stale
+     schedule rows for postponed games); dropped.
+   * ``play_by_play`` mixes two schemas. Legacy (1996-97 to part of 2019-20)
+     marks shots ``actionType`` 'Made Shot'/'Missed Shot' (sometimes with
+     trailing spaces); live (2019-20 on) uses '2pt'/'3pt'. ``isFieldGoal`` is
+     NULL for 323 live-format 2019-20 games, so shots are identified by
+     ``actionType``, never by ``isFieldGoal``. ``teamId`` is NULL for all of
+     2026-27; ``stg.shots`` recovers it from the shooter's box-score row
+     (flagged ``team_id_repaired``).
 
 No metric logic lives here.
 """
@@ -125,7 +136,8 @@ select
     turnoversTeam            as team_tov,
     foulsPersonal            as pf,
     numMinutes               as minutes
-from kaggle.team_statistics;
+from kaggle.team_statistics
+where teamId <> 0;
 
 create or replace view stg.pbp as
 select
@@ -136,6 +148,52 @@ select
     try_cast(teamId as bigint)        as team_id,
     * exclude (gameId)
 from kaggle.play_by_play;
+
+-- One row per field-goal attempt, both PBP schemas unified.
+-- x_legacy / y_legacy: tenths of a foot, rim at (0, 0), +y toward half court.
+create or replace view stg.shots as
+with s as (
+    select
+        p.*,
+        trim(p.actionType) as action_type,
+        case when p.actionType in ('2pt', '3pt') then 'live' else 'legacy' end as pbp_format
+    from stg.pbp p
+    where trim(p.actionType) in ('Made Shot', 'Missed Shot') or p.actionType in ('2pt', '3pt')
+)
+select
+    s.game_id,
+    s.season,
+    s.season_type,
+    s.actionNumber                                   as action_number,
+    s.period,
+    s.clock,
+    s.pbp_format,
+    coalesce(s.team_id, pg.team_id)                  as team_id,
+    s.team_id is null                                as team_id_repaired,
+    s.person_id,
+    case
+        when s.action_type = '3pt' then 3
+        when s.action_type = '2pt' then 2
+        when s.shotValue in (2, 3) then s.shotValue
+        when s.description ilike '%3PT%' then 3
+        else 2
+    end                                              as shot_value,
+    case
+        when s.pbp_format = 'legacy' then s.action_type = 'Made Shot'
+        else s.shotResult ilike '%made'
+    end                                              as made,
+    s.xLegacy                                        as x_legacy,
+    s.yLegacy                                        as y_legacy,
+    s.shotDistance                                   as shot_distance,
+    trim(s.subType)                                  as sub_type,
+    s.descriptor,
+    s.area,
+    s.areaDetail                                     as area_detail,
+    try_cast(nullif(s.assistPersonId, '0') as bigint) as assist_person_id,
+    try_cast(nullif(s.blockPersonId, '0') as bigint)  as block_person_id,
+    s.description
+from s
+left join stg.player_games pg on pg.game_id = s.game_id and pg.person_id = s.person_id;
 """
 
 

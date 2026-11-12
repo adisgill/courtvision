@@ -75,6 +75,25 @@ def nba_api(
         typer.echo(f"{n:>10,}  nba_api.{name} ({season})")
 
 
+audit_app = typer.Typer(help="Profile sources and write docs/audit/*.md.", no_args_is_help=True)
+app.add_typer(audit_app, name="audit")
+
+
+@audit_app.command("kaggle")
+def audit_kaggle() -> None:
+    """Profile every Kaggle table; write docs/audit/kaggle/*.md."""
+    from courtvision.audit import audit_kaggle as run
+    from courtvision.config import REPO_ROOT
+    from courtvision.db import connect
+
+    with connect() as con:
+        result = run(con, REPO_ROOT / "docs" / "audit" / "kaggle", get_paths().kaggle_raw)
+    for view, info in result["tables"].items():
+        typer.echo(f"{info['rows']:>12,} rows {info['cols']:>4} cols  {view}")
+    for name, res in result["checks"].items():
+        typer.echo(f"  {res:>12}  {name}")
+
+
 @ingest_app.command("kaggle")
 def kaggle_all(
     version: int | None = typer.Option(None, help="Pin a Kaggle dataset version."),
