@@ -77,6 +77,11 @@ def md_table(df: pd.DataFrame, align_right: bool = True) -> str:
     return "\n".join(lines)
 
 
+def write_md(path: Path, text: str) -> None:
+    """Write with LF line endings on every OS (the repo normalizes to LF)."""
+    path.write_text(text, encoding="utf-8", newline="\n")
+
+
 def season_label(s: int | float | None) -> str:
     if s is None or pd.isna(s):
         return ""
@@ -408,6 +413,182 @@ def pbp_shot_quality(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     ).df()
 
 
+# --------------------------------------------------------------- nba_api joins
+
+
+def nba_api_join_report(con: duckdb.DuckDBPyConnection, season: int) -> str:
+    """Markdown report: how nba_api tables for ``season`` join to the Kaggle tables."""
+    s = int(season)
+    out = [f"# nba_api ↔ Kaggle joins, {season_label(s)}", ""]
+
+    def tbl(sql: str) -> str:
+        return md_table(con.sql(sql).df(), align_right=True)
+
+    out += ["## Rows loaded", ""]
+    out.append(
+        tbl(
+            " union all ".join(
+                f"select 'nba_api.{t}' as table, count(*) as rows, "
+                f"count(distinct game_id) as games from nba_api.{t} where season = {s}"
+                for t in ("game_log", "shots", "pbp", "rotations")
+            )
+        )
+    )
+    out += ["", "## Games: nba_api `leaguegamelog` vs Kaggle `games`", ""]
+    out.append(
+        tbl(
+            f"""with a as (select distinct game_id, season_type from nba_api.game_log
+                           where season = {s}),
+                     k as (select game_id, season_type from stg.games where season = {s}
+                           and season_type in ('regular', 'play_in', 'playoffs'))
+                select coalesce(a.season_type, k.season_type) as season_type,
+                       count(*) filter (where a.game_id is not null and k.game_id is not null)
+                           as in_both,
+                       count(*) filter (where k.game_id is null) as nba_api_only,
+                       count(*) filter (where a.game_id is null) as kaggle_only
+                from a full join k using (game_id) group by 1 order by 1"""
+        )
+    )
+    out += ["", "## Team and player ids", ""]
+    parts = []
+    for t in ("game_log", "shots", "pbp", "rotations"):
+        parts.append(
+            f"""select 'nba_api.{t}' as table,
+                count(distinct team_id) filter (where team_id is not null) as teams,
+                count(distinct team_id) filter (where team_id is not null and team_id not in
+                    (select teamId from kaggle.team_histories)) as teams_not_in_kaggle"""
+            + (
+                ""
+                if t == "game_log"
+                else """,
+                count(distinct person_id) as persons,
+                count(distinct person_id) filter (where person_id not in
+                    (select person_id from stg.players)) as persons_not_in_players,
+                round(100 * avg((exists (select 1 from stg.player_games pg
+                    where pg.game_id = x.game_id and pg.person_id = x.person_id))::int), 2)
+                    as "row's (game, person) in player_games %" """
+            )
+            + f" from nba_api.{t} x where season = {s}"
+            + ("" if t == "game_log" else " and person_id is not null")
+        )
+    df = pd.concat([con.sql(p).df() for p in parts], ignore_index=True)
+    out.append(md_table(df))
+
+    out += [
+        "",
+        "## Shots: nba_api `shotchartdetail` vs Kaggle `stg.shots`",
+        "",
+        "Restricted to games present in both sources. Kaggle's 2019-20+ play-by-play is the "
+        "live-feed schema, whose `actionNumber` is not the stats-API event number, so shots "
+        "are matched on (game, shooter, period, game clock to the second) rather than on the "
+        "event id.",
+        "",
+    ]
+    con.execute(
+        f"""create or replace temp table _api_shots as
+            select game_id, season_type, person_id, PERIOD as period,
+                   MINUTES_REMAINING * 60 + SECONDS_REMAINING as sec_left,
+                   LOC_X as x, LOC_Y as y, SHOT_MADE_FLAG = 1 as made,
+                   case when SHOT_TYPE ilike '3PT%' then 3 else 2 end as shot_value,
+                   SHOT_ZONE_BASIC as zone_basic, SHOT_ZONE_AREA as zone_area,
+                   SHOT_DISTANCE as dist, GAME_EVENT_ID as event_id
+            from nba_api.shots where season = {s}"""
+    )
+    con.execute(
+        f"""create or replace temp table _kg_shots as
+            select game_id, person_id, period,
+                   floor(coalesce(
+                     try_cast(regexp_extract(clock, 'PT(\\d+)M', 1) as int) * 60
+                     + try_cast(regexp_extract(clock, 'M(\\d+)', 1) as double), -1))::int
+                       as sec_left,
+                   x_legacy as x, y_legacy as y, made, shot_value, action_number
+            from stg.shots where season = {s}
+              and game_id in (select distinct game_id from _api_shots)"""
+    )
+    out.append(
+        tbl(
+            """with m as (
+                 select a.*, k.x kx, k.y ky, k.made kmade, k.shot_value kval,
+                        row_number() over (partition by a.game_id, a.person_id, a.period,
+                            a.sec_left, a.event_id order by abs(coalesce(k.x - a.x, 999))
+                            + abs(coalesce(k.y - a.y, 999))) rn
+                 from _api_shots a left join _kg_shots k
+                   on k.game_id = a.game_id and k.person_id = a.person_id
+                  and k.period = a.period and abs(k.sec_left - a.sec_left) <= 1)
+               select season_type,
+                      count(*) as api_shots,
+                      (select count(*) from _kg_shots k join (select distinct game_id,
+                          season_type st from _api_shots) g on g.game_id = k.game_id
+                          where g.st = m.season_type) as kaggle_shots,
+                      round(100 * avg((kx is not null or kmade is not null)::int), 2)
+                          as "matched %",
+                      round(100 * avg((kx = x and ky = y)::int)
+                          / nullif(avg((kmade is not null)::int), 0), 2) as "same x,y %",
+                      round(100 * avg((abs(kx - x) <= 10 and abs(ky - y) <= 10)::int)
+                          / nullif(avg((kmade is not null)::int), 0), 2) as "x,y within 1 ft %",
+                      round(100 * avg((kmade = made)::int)
+                          / nullif(avg((kmade is not null)::int), 0), 2) as "same made %",
+                      round(100 * avg((kval = shot_value)::int)
+                          / nullif(avg((kmade is not null)::int), 0), 2) as "same 2/3 %"
+               from m where rn = 1 group by season_type order by season_type"""
+        )
+    )
+    out += [
+        "",
+        "## Official shot zones (`SHOT_ZONE_BASIC`) vs coordinates",
+        "",
+        "Ground truth for the zone geometry in docs/metrics_spec.md. Distances in feet, "
+        "coordinates in tenths of a foot from the rim.",
+        "",
+    ]
+    out.append(
+        tbl(
+            """select zone_basic, count(*) as fga, round(100.0 * count(*) / sum(count(*)) over (),
+                      1) as "share %", round(avg(made::int) * 100, 1) as "FG %",
+                      min(dist) as min_ft, max(dist) as max_ft,
+                      min(abs(x)) as min_abs_x, max(abs(x)) as max_abs_x,
+                      min(y) as min_y, max(y) as max_y
+               from _api_shots group by 1 order by fga desc"""
+        )
+    )
+    out += ["", "## Rotations: stint minutes vs box-score minutes", ""]
+    out.append(
+        tbl(
+            f"""with r as (select game_id, person_id,
+                         sum(out_seconds - in_seconds) / 60.0 as stint_min
+                         from nba_api.rotations where season = {s} group by all),
+                    j as (select r.*, pg.minutes as box_min from r
+                          left join stg.player_games pg using (game_id, person_id))
+               select count(*) as player_games,
+                      round(100 * avg((box_min is not null)::int), 2) as "found in box %",
+                      round(100 * avg((abs(stint_min - box_min) <= 0.5)::int)
+                          / avg((box_min is not null)::int), 2) as "within 0.5 min %",
+                      round(100 * avg((abs(stint_min - box_min) <= 1.0)::int)
+                          / avg((box_min is not null)::int), 2) as "within 1 min %",
+                      round(avg(abs(stint_min - box_min)), 3) as "mean abs diff (min)"
+               from j"""
+        )
+    )
+    out += ["", "## Team box scores: nba_api `leaguegamelog` vs Kaggle `team_statistics`", ""]
+    out.append(
+        tbl(
+            f"""select count(*) as team_games,
+                   round(100 * avg((t.team_id is not null)::int), 2) as "found %",
+                   round(100 * avg((g.PTS = t.points)::int), 2) as "same PTS %",
+                   round(100 * avg((g.FGA = t.fga)::int), 2) as "same FGA %",
+                   round(100 * avg((g.TOV = t.tov)::int), 2) as "same TOV %",
+                   round(100 * avg((g.TOV = t.tov + t.team_tov)::int), 2)
+                       as "TOV = Kaggle tov + team_tov %",
+                   round(100 * avg((g.OREB = t.oreb)::int), 2) as "same OREB %",
+                   round(100 * avg((g.STL = t.stl)::int), 2) as "same STL %"
+               from nba_api.game_log g left join stg.team_games t
+                 on t.game_id = g.game_id and t.team_id = g.team_id
+               where g.season = {s}"""
+        )
+    )
+    return "\n".join(out) + "\n"
+
+
 # ------------------------------------------------------------------- top level
 
 
@@ -431,43 +612,44 @@ def audit_kaggle(con: duckdb.DuckDBPyConnection, out_dir: Path, raw_dir: Path) -
     for f in files:
         view = f"kaggle.{table_name(f)}"
         p = profile_table(con, view)
-        (out_dir / f"{table_name(f)}.md").write_text(
-            header + "\n" + render_profile(p, f), encoding="utf-8"
-        )
+        write_md(out_dir / f"{table_name(f)}.md", header + "\n" + render_profile(p, f))
         summary[view] = {"rows": p.rows, "cols": len(p.columns), "seasons": p.season_range}
 
     cov = coverage_by_season(con)
-    (out_dir / "_coverage.md").write_text(
+    write_md(
+        out_dir / "_coverage.md",
         header + "\n# Games per season, by table\n\nDistinct `gameId`s per season. "
         "`(reg)` = regular season (`gameId` type digit 2, which includes NBA Cup "
         "group/knockout games but not the Cup final).\n\n" + md_table(cov) + "\n",
-        encoding="utf-8",
     )
     avail, detail = stat_availability(con)
-    (out_dir / "_stat_availability.md").write_text(
+    write_md(
+        out_dir / "_stat_availability.md",
         header + "\n# When each box-score stat starts being recorded\n\n"
         "A stat counts as recorded for a team-game when its value is non-zero (summing player "
         "rows for the player box score). The season shown is the first from which the share "
         "of regular-season team-games stays at or above the threshold in **every** later "
         "season.\n\n" + md_table(avail) + "\n\n## Player box scores: % of team-games with a "
         "non-zero value, per season\n\n" + md_table(detail) + "\n",
-        encoding="utf-8",
     )
     checks = integrity_checks(con)
     chk = pd.DataFrame([(n, r) for n, r, _ in checks], columns=["check", "result"])
     sqls = "\n\n".join(f"**{n}**\n\n```sql\n{s}\n```" for n, _, s in checks)
-    (out_dir / "_checks.md").write_text(
+    write_md(
+        out_dir / "_checks.md",
         header + "\n# Integrity checks\n\n" + md_table(chk, align_right=False)
         + "\n\n## SQL\n\n" + sqls + "\n",
-        encoding="utf-8",
     )  # fmt: skip
     shots = pbp_shot_quality(con)
     shots["season"] = shots["season"].map(season_label)
-    (out_dir / "_pbp_shots.md").write_text(
-        header + "\n# Play-by-play shot rows vs box scores (regular season)\n\n"
-        "`pbp_fga` counts PBP rows with `isFieldGoal`; `box_fga` sums team box-score FGA. "
-        "`at (0,0) %` flags placeholder coordinates; `y>40ft %` flags heaves/backcourt "
-        "shots (yLegacy is tenths of a foot from the rim).\n\n" + md_table(shots) + "\n",
-        encoding="utf-8",
-    )
+    write_md(
+        out_dir / "_pbp_shots.md",
+        header + "\n# Play-by-play shots vs box-score FGA (regular season)\n\n"
+        "`isFieldGoal rows` counts the raw flag; `stg.shots rows` identifies shots by "
+        "`actionType` across both PBP schemas (the flag is NULL in 323 games of 2019-20). "
+        "`at (0,0) %` = shots logged exactly at the rim (almost all layups/dunks before "
+        "2010-11); `jumper at (0,0) %` = jump shots or 3s at the rim, i.e. a truly missing "
+        "location. Coordinates are `xLegacy`/`yLegacy`, tenths of a foot from the rim.\n\n"
+        + md_table(shots) + "\n",
+    )  # fmt: skip
     return {"tables": summary, "checks": {n: r for n, r, _ in checks}}
