@@ -22,11 +22,17 @@ through 2030-31 with its options, reads each team's payroll against the cap, tax
 aprons, finds where each team is short, lists the players who would fix it (trades,
 unsigned players, next summer's free agents) with cost and risk, and projects every
 team's cap space next summer. **Forecasts** predict each team's next game: dimension
-ratings, every expected player, the margin and the win chance.
+ratings, every expected player's stat line with an 80% range, the margin and the win
+chance, from a model **tested walk-forward** on every game of five seasons (each week
+predicted from earlier games only). **Coaching analytics** measure what the NBA doesn't
+publish: timeouts that stop runs, plays out of timeouts, tempo control, halftime
+adjustments, clutch results, coach vs coach, and each team's margin against what its
+roster predicted; every coach metric is tested for whether it follows the coach to a new
+team, so you can tell coaching from roster.
 
-> Status: **v1.3** for every season from 1974-75 (box-score tiers) and 1996-97
-> (play-by-play), with a validation report, a visualizer, a live mode, the market and
-> next-game forecasts.
+> Status: **v1.4** for every season from 1974-75 (box-score tiers) and 1996-97
+> (play-by-play), with a validation report, a visualizer, a live mode, the market,
+> walk-forward-tested next-game forecasts and coaching analytics.
 >
 > * [`docs/metrics_spec.md`](docs/metrics_spec.md): formulas, scaling, roll-ups, tiers, acceptance tests
 > * [`docs/validation.md`](docs/validation.md): stabilization, persistence, signal beyond Four Factors
@@ -46,8 +52,10 @@ ratings, every expected player, the margin and the win chance.
    salaries (a HoopsHype snapshot of 2026-07-07), payrolls, and cap / tax / apron
    levels. Used only by the market model.
 4. **Kaggle** — [`deocheng/nba-data-1946-2026`](https://www.kaggle.com/datasets/deocheng/nba-data-1946-2026)
-   (Apache-2.0 on Kaggle; scraped from Basketball-Reference, 17–23 June 2026): only
-   `public.player_contracts`, every contract's future years and options.
+   (Apache-2.0 on Kaggle; scraped from Basketball-Reference, 17–23 June 2026):
+   `public.player_contracts` (every contract's future years and options) and
+   `public.coaches` / `public.coach_stats` (who coached each team, and for how many
+   games, to assign a coach to every game).
 5. **[Basketball-Reference](https://www.basketball-reference.com/contracts/)** team contract
    pages, fetched on request (`courtvision ingest salaries --fetch-current`: 30 pages,
    4 s apart, cached per day, kept on your machine): today's contracts, the newest source.
@@ -69,9 +77,12 @@ uv run courtvision ingest nba-api --season 2025   # optional: ~1 h cold, for val
 uv run courtvision metrics build                  # every rating, all seasons (~9 min)
 uv run courtvision ingest salaries --fetch-current  # salaries, contracts (today's), cap
 uv run courtvision market build                   # value, budgets, needs, options, free agency
-uv run courtvision forecast                       # each team's next game + backtest (seconds)
+uv run courtvision ingest coaches                 # coach of every game since 1996-97
+uv run courtvision coaching                       # coaching analytics (~1 min)
+uv run courtvision walkforward                    # test predictions on 5 seasons (~1 min)
+uv run courtvision forecast                       # each team's next game (seconds)
 uv run courtvision validate                       # regenerate docs/validation.md
-uv run courtvision app                            # league / upcoming / team / game / player / market / live
+uv run courtvision app                            # league / upcoming / team / game / player / coaches / market / live
 uv run courtvision live                           # today's games; --game-id X rates one
 ```
 
@@ -97,7 +108,8 @@ order by defense_rating desc;
 | `metrics.*` | possessions, lineups, counts, league baselines, ratings (`team_game`, `team_season`, `player_game`, `player_season`, `presence_season`, `ratings_long`, ...), `player_impact` (per-possession impact), `team_season_adj` (opponent-adjusted), `player_role` (usage); see spec section 7 | `metrics build` |
 | `salary.*` | `book` (every contract by season, with options), `contract_summary` (status next summer), `contracts` (July snapshot, NBA ids), `cap`, `min_salaries`, ... | `ingest salaries` |
 | `market.*` | `players` (value, price, contract, risk), `teams` (budget, needs, next summer's space), `options`, `fa_class`, `fa_options`, `params` | `market build` |
-| `forecast.*` | `games` (margin, win chance), `team` (predicted dimensions), `players`, `backtest_team`, `backtest_games` | `forecast` |
+| `coach.*` | `assignments` (coach of every team-game), `possessions`, `timeouts`, `team_games`, `profiles` (per coach-season and career), `tempo`, `value` (margin vs expectation), `value_reliability` (which metrics are coaching), `h2h` (coach vs coach) | `ingest coaches`, `coaching`, `walkforward` |
+| `forecast.*` | `games` (margin, win chance, rest), `team` (predicted dimensions), `players` (predicted ratings), `player_lines` (stat lines with 80% ranges), `wf_*` (walk-forward predictions and evaluation), `margin_model`, `backtest_*` | `walkforward`, `forecast` |
 
 Parquet under `data/parquet/` is the durable copy; the DuckDB file holds views
 over it and rebuilds in seconds. Raw downloads and every nba_api response
@@ -109,9 +121,12 @@ over it and rebuilds in seconds. Raw downloads and every nba_api response
 src/courtvision/   library + CLI (`courtvision ...`)
   ingest/          Kaggle download/load, nba_api client + pull, staging views
   metrics/         play-by-play parser (possessions, lineups), counts, measures, ratings
-  app/             Streamlit visualizer: league, team, game, player, market, live (click-through charts)
+  app/             Streamlit visualizer: league, upcoming, team, game, player, coaches, market, live
   live.py          live-game ratings from the NBA live feed
   market.py        player value, team budgets and needs, options and risk
+  coaching.py      coaching analytics from play-by-play, coach value, coach vs coach
+  walkforward.py   walk-forward prediction engine (games, player stat lines, ranges)
+  forecast.py      each team's next game
   validation.py    generates docs/validation.md
   audit.py         generates docs/audit/*
 notebooks/         validation notebook (same numbers as docs/validation.md)

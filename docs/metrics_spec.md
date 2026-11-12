@@ -1,11 +1,12 @@
 # Metrics spec
 
-**Status: v1.3.** v1.0 approved 2026-11-12 with every recommended decision
+**Status: v1.4.** v1.0 approved 2026-11-12 with every recommended decision
 (D1–D9); v1.1 (free throws, fouls valuation, role, per-possession impact, opponent
 adjustment, market model) approved the same day, see [section 11](#11-v11-2026-11-12);
 v1.2 (box-score prior for impact) also the same day, see [section 12](#12-v12-2026-11-12);
 v1.3 (contracts, market-comparables pricing, free agency, NBA.com advanced stats) and
-next-game forecasts in sections 13 and 14.
+next-game forecasts in sections 13 and 14; v1.4 (coaching analytics, walk-forward
+prediction engine) in sections 15 and 16.
 Implemented in `src/courtvision/metrics/` and `src/courtvision/market.py`;
 `uv run courtvision build` reproduces every number. Section 10 records what
 implementation added or settled beyond the draft; section 8 has the
@@ -19,7 +20,9 @@ Contents: [0 Decisions](#0-decisions) ·
 [8 Acceptance tests](#8-acceptance-tests) · [9 Out of scope](#9-out-of-scope-for-v1) ·
 [10 Implementation notes](#10-implementation-notes-v10) · [11 v1.1](#11-v11-2026-11-12) ·
 [12 v1.2](#12-v12-2026-11-12) · [13 v1.3](#13-v13-contracts-pricing-free-agency-nbacom-advanced-stats-2026-11-12) ·
-[14 Forecasts](#14-forecasts-for-each-teams-next-game-2026-11-12)
+[14 Forecasts](#14-forecasts-for-each-teams-next-game-2026-11-12) ·
+[15 Coaching](#15-coaching-analytics-2026-11-12) ·
+[16 Walk-forward](#16-walk-forward-prediction-engine-2026-11-12)
 
 ---
 
@@ -874,3 +877,127 @@ strength. `courtvision forecast` (`courtvision.forecast`, schema `forecast`):
   nothing leaks). 2025-26: blend 75% form / 25% roster; margin error 11.5 points (13.4
   picking the home team), 68% of winners (55%), Brier 0.207 (0.25), σ 14.6. Team
   dimensions beat each team's season-to-date average on 15 of 16 measures.
+
+The live forecast now uses the walk-forward model of section 16 for margin and win chance
+(the blend above is kept as `blend_margin` / `blend_win_prob`), and adds each expected
+player's stat line with an 80% range (`forecast.player_lines`).
+
+## 15. Coaching analytics (2026-11-12)
+
+Requested by the user: coaching form, plays, coach vs coach, and metrics the NBA doesn't
+track. Everything is computed from play-by-play (1996-97 on), no tracking data.
+
+**15.1 Who coached each game** (`courtvision ingest coaches` → `coach.coaches`,
+`coach.assignments`). The Kaggle box scores carry no coach, so coaches come from
+Basketball-Reference's coach records in Kaggle `deocheng/nba-data-1946-2026`
+(`public.coach_stats`: coach, season, team, games, wins). A team-season with several
+coaches is split at the game where each coach's record matches the team's results in
+order (every order of the stints is tried). 71,404 team-games, 190 coaches; 12
+team-seasons whose records don't add up give every game to the main coach. The current
+season isn't in the records yet: each team keeps last season's final coach, flagged
+`assumed` (a summer hire is credited to his predecessor until the source updates).
+
+**15.2 Metrics** (`courtvision coaching` → `coach.possessions`, `coach.timeouts`,
+`coach.team_games`, `coach.profiles` per coach-season and career (`season = 0`),
+`coach.tempo`):
+
+| Metric | Definition |
+|---|---|
+| After-timeout scoring | points on the calling team's next offensive action after its timeout, per 100 plays, minus league; shrunk with 250 plays of prior |
+| After-timeout play mix | share of those plays ending in a three, free throws, a turnover, minus league |
+| Timeouts that stop runs | opponent points per possession in the 3 possessions before minus the 3 after, minus league, per 100; shrunk (250 timeouts) |
+| Halftime adjustment | third-quarter net per 100 minus first-half net per 100; shrunk (120 games) |
+| Clutch net | net per 100 possessions with ≤ 5:00 left in the 4th or overtime and the margin ≤ 5; shrunk (600 possessions) |
+| Transition share / scoring | share of possessions after a miss or steal with the first action within 8 s; points per 100 on them minus league |
+| Tempo control | per game, \|game pace − opponent's usual pace\| − \|game pace − own usual pace\|; game pace = both teams' possessions averaged; usual = the team's other games that season. The two sides of a game sum to zero |
+| Rotation, starters' minutes in blowouts | players with 10+ minutes vs league; top-five minutes in games decided by 20+ |
+| Bounce-back | net per 100 after a loss minus after a win; shrunk (120 games) |
+| Timeouts, challenges | per game (challenges from 2019-20) |
+
+Possession start types (2025-26): after a make 1.10 points per possession, after a miss
+1.16, others (mostly dead-ball and free-throw starts) 1.25.
+
+**15.3 Value against expectation and coach vs coach** (after the walk-forward:
+`coach.value`, `coach.value_reliability`, `coach.h2h`):
+
+* *Beats roster expectation*: the team's margin minus the walk-forward roster view
+  (last season's player impact over expected minutes, home court included), per game;
+  *beats the prediction*: margin minus the walk-forward pre-game prediction. Shrunk by
+  `games / (games + k)` with `k` from the split-half reliability (21 and 74 games).
+* `coach.h2h`: per ordered coach pair, record, average margin, tempo control (every
+  season) and margin against the prediction (2020-21 on).
+
+**15.4 Which metrics are coaching?** A coach metric should repeat for the same coach and,
+more tellingly, follow him to a new team with different players (`persistence`;
+coach-seasons with 40+ games; about 40 team changes since 1996-97, so r below ~0.3 is not
+distinguishable from zero):
+
+| Follows the coach (new-team r) | Doesn't |
+|---|---|
+| tempo control 0.66, starters' minutes in blowouts 0.53, timeouts per game 0.48, timeouts that stop runs 0.48, pace 0.39, after-timeout three share 0.35, 3-point rate 0.29 | after-timeout scoring −0.13, after-timeout turnovers −0.11, halftime adjustment −0.40, clutch net 0.08, rotation depth 0.05, bounce-back 0.10, team net 0.12 |
+
+Beats-roster-expectation is consistent within a season (split-half 0.70) but not from
+one season to the next (−0.06): it captures what a team became that season (development,
+rookies the roster view prices at a flat newcomer value, health), not a trait that
+carries over. A coach pair's head-to-head history doesn't predict their next meeting
+beyond the model (r = 0.003 over 10,258 games). The app says so wherever these appear.
+
+## 16. Walk-forward prediction engine (2026-11-12)
+
+Requested by the user: player and team prediction from stats and form, tested
+walk-forward, weighing matchups (team and positional). `courtvision walkforward`
+(`courtvision.walkforward` → `forecast.wf_*`, `forecast.margin_model`,
+`forecast.wf_residuals`).
+
+**Protocol.** Seasons 2020-21 (warm-up) and 2021-22 to 2025-26. Every week, every game of
+that week is predicted from games before the week only; stage 2 is fitted on earlier
+seasons' stage-1 outputs only (expanding window). No feature uses the predicted season's
+results except through games already played.
+
+**Stage 1 (per game):** team form (section 14's net model), the roster view (last
+season's impact × expected minutes / 48 + home court; expected minutes: when he plays,
+recent games weighted with a 5-game half-life, team total capped at 250), expected pace,
+rest (days since the last game, capped at 3; back-to-back flags), the coach's running
+margin against expectation (shrunk, 50 games), and style interactions (three-point
+reliance × threes allowed, offensive × defensive rebounding, ball security × forced
+turnovers, paint reliance × paint defense).
+
+**Stage 2:** ridge regression of the home margin on feature groups added one at a time;
+win chance Φ(margin / σ). 6,146 games:
+
+| Model | Margin error | Winners | Brier | Log loss |
+|---|---|---|---|---|
+| home court only | 12.29 | 55.3% | 0.2475 | 0.6881 |
+| + team form | 11.12 | 64.3% | 0.2190 | 0.6274 |
+| + roster | 10.94 | 65.5% | 0.2143 | 0.6172 |
+| **+ rest (chosen)** | **10.90** | **65.8%** | **0.2135** | **0.6152** |
+| + coach | 10.99 | 65.2% | 0.2152 | 0.6195 |
+| + style matchups | 10.98 | 65.4% | 0.2151 | 0.6193 |
+
+Chosen model (fitted on all evaluation seasons, used live): margin = −0.36 + 0.735·form
++ 0.463·roster − 2.37·(home on a back-to-back) + 2.32·(away on a back-to-back) +
+0.245·(rest difference), σ 13.9. Win chances are calibrated (deciles from 25% predicted /
+21% won to 82% / 85%). Coach and style-matchup features made out-of-sample predictions
+worse, so they are measured and shown but not used.
+
+**Players:** for every expected player, points, rebounds, assists, threes, steals +
+blocks and turnovers = per-minute rate (recent games, 25-game half-life, shrunk toward
+last season's rate with 250 minutes of prior; newcomers at 80% of league) × expected
+minutes × game pace / team pace × the opponent's allowance to his position group (guards,
+wings, bigs; shrunk with 12 games). 118,415 player-games played:
+
+| Stat | Model error | Season-average error | 80% range coverage (2023-24 on) |
+|---|---|---|---|
+| points | 4.737 | 4.733 | 80.4% |
+| rebounds | 1.939 | 1.955 | 80.1% |
+| assists | 1.345 | 1.356 | 79.5% |
+| threes | 0.883 | 0.892 | 79.5% |
+| steals + blocks | 0.915 | 0.937 | 78.9% |
+| turnovers | 0.888 | 0.909 | 80.0% |
+
+Ranges: sd = c·√(expected), with c set so 80% of the 2021-22 and 2022-23 misses fall
+inside (an RMS-based width over-covers: counts are peaked with long tails), then checked
+on later seasons. Positional matchups and pace change player errors by less than 0.002;
+they are kept because they cost nothing, but they aren't claimed to help. Minutes when he
+plays: error 5.5. A projection is conditional on playing: there is no injury feed, and
+26% of players expected from recent games didn't play.

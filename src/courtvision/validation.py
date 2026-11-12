@@ -21,6 +21,7 @@ import pandas as pd
 
 from courtvision.metrics import measures as M
 from courtvision.metrics import rate
+from courtvision.walkforward import FEATURES
 
 FIRST, LAST = 1996, 2025  # complete play-by-play seasons used for team validation
 
@@ -590,5 +591,106 @@ def report(con) -> str:
         "",
         _md_table(KAGGLE_USE),
         "",
+        *walkforward_sections(con),
     ]
     return "\n".join(parts)
+
+
+def _has_table(con, schema: str, table: str) -> bool:
+    return bool(con.execute("select count(*) from information_schema.tables where "
+                            "table_schema = ? and table_name = ?", [schema, table]
+                            ).fetchall()[0][0])  # fmt: skip
+
+
+def walkforward_sections(con) -> list[str]:
+    """Sections 9-10: the walk-forward test of predictions, and which coach metrics are
+    coaching (only once ``courtvision walkforward`` has run)."""
+    if not _has_table(con, "forecast", "wf_eval"):
+        return []
+    ev = con.sql("select * from forecast.wf_eval").df()
+    ev["games"] = ev.games.astype(int)
+    order = {m: i for i, m in enumerate(FEATURES)}
+    overall = ev[ev.season == 0].sort_values("model", key=lambda m: m.map(order))
+    best = con.sql("select any_value(model) m from forecast.margin_model "
+                   "where model <> 'player intervals'").df().m.iloc[0]  # fmt: skip
+    by_season = ev[(ev.model == best) & (ev.season > 0)].sort_values("season")
+    mm = con.sql("select feature, beta, sigma from forecast.margin_model "
+                 "where model <> 'player intervals'").df()  # fmt: skip
+    cal = con.sql("select predicted, actual, games from forecast.wf_calibration "
+                  "order by bin").df()  # fmt: skip
+    pe = con.sql("select * from forecast.wf_player_eval").df()
+    cols = ["model", "games", "margin_mae", "margin_rmse", "accuracy", "brier", "log_loss"]
+    parts = [
+        "## 9. Walk-forward test of predictions",
+        "",
+        "Every game of 2021-22 to 2025-26 predicted a week at a time from earlier games only; "
+        "the second stage is fitted on earlier seasons only. Each model adds one group of "
+        f"features to the one above it. Chosen by log loss: **{best}**.",
+        "",
+        _md_table(overall[cols], ".4f"),
+        "",
+        "The chosen model by season:",
+        "",
+        _md_table(by_season[["season", *cols[1:]]], ".4f"),
+        "",
+        f"Coefficients (all evaluation seasons; used live), sigma {mm.sigma.iloc[0]:.2f}:",
+        "",
+        _md_table(mm[["feature", "beta"]], ".3f"),
+        "",
+        "Calibration: predicted home win chance by decile against how often the home team won.",
+        "",
+        _md_table(cal),
+        "",
+        "Player stat lines (player-games played): error of the model, the model without the "
+        "positional matchup, without matchup or pace, and the season-to-date average; "
+        "correlation with the outcome; share of outcomes inside the 80% range in 2023-24 to "
+        "2025-26 (width fitted on 2021-22 and 2022-23); width constant `spread_c`.",
+        "",
+        _md_table(pe, ".3f"),
+        "",
+    ]
+    if _has_table(con, "coach", "value_reliability"):
+        rel = con.sql("select * from coach.value_reliability").df()
+        traits = rel.dropna(subset=["same_coach_corr"]).sort_values("new_team_corr",
+                                                                    ascending=False)  # fmt: skip
+        parts += [
+            "## 10. Which coach metrics are coaching?",
+            "",
+            "Each coach metric for the same coach in consecutive seasons (40+ games each), "
+            "and only where he changed teams: a trait of the coach should follow him to new "
+            "players. Few coaches move, so new-team correlations below about 0.3 are not "
+            "distinguishable from zero.",
+            "",
+            _md_table(
+                traits[
+                    [
+                        "metric",
+                        "same_coach_corr",
+                        "same_coach_pairs",
+                        "new_team_corr",
+                        "new_team_pairs",
+                    ]
+                ]
+            ),  # fmt: skip
+            "",
+            "Margin against expectation: split-half within a season (stepped up to a full "
+            "season), season to season, and `k_games`, the games of evidence at which a "
+            "coach's own number and zero count equally. `h2h_vs_pred`: correlation between a "
+            "coach pair's past margin against the prediction and their next meeting's.",
+            "",
+            _md_table(
+                rel[rel.metric.isin(["vs_roster", "vs_pred", "h2h_vs_pred"])][
+                    [
+                        "metric",
+                        "coach_seasons",
+                        "split_half",
+                        "season_reliability",
+                        "year_to_year",
+                        "year_pairs",
+                        "k_games",
+                    ]
+                ]
+            ),  # fmt: skip
+            "",
+        ]
+    return parts
