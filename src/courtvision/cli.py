@@ -254,6 +254,68 @@ def forecast_cmd() -> None:
     typer.echo(bt.round(3).to_string(index=False))
 
 
+def _coach_raw():
+    """Coach records live with the rest of the Kaggle deocheng (Basketball-Reference) files."""
+    return get_paths().data / "raw" / "salaries" / "deocheng"
+
+
+def _has_coach_files() -> bool:
+    return any(_coach_raw().rglob("public.coach_stats.csv")) if _coach_raw().exists() else False
+
+
+@ingest_app.command("coaches")
+def ingest_coaches(
+    download: bool = typer.Option(True, help="Download from Kaggle first (else use the cache)."),
+) -> None:
+    """Head coach of every team-game since 1996-97 -> coach.coaches, coach.assignments."""
+    from courtvision.db import connect
+    from courtvision.ingest import coaches
+
+    if download or not _has_coach_files():
+        coaches.download(_coach_raw())
+    with connect() as con:
+        res = coaches.load(con, _coach_raw())
+    typer.echo(res)
+
+
+@app.command("coaching")
+def coaching_cmd() -> None:
+    """Coaching analytics from play-by-play -> coach.* (possessions, timeouts, profiles,
+    tempo); coach value and coach vs coach when the walk-forward has run."""
+    import logging
+
+    from courtvision import coaching
+    from courtvision.db import connect
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    with connect() as con:
+        typer.echo(coaching.build(con))
+        has_wf = con.execute("select count(*) from information_schema.tables where "
+                             "table_schema = 'forecast' and table_name = 'wf_games'"
+                             ).fetchall()[0][0]  # fmt: skip
+        if has_wf:
+            typer.echo(coaching.value(con)["reliability"].round(3).to_string(index=False))
+
+
+@app.command("walkforward")
+def walkforward_cmd() -> None:
+    """Walk-forward test of game and player predictions (2021-22 to 2025-26, weekly, only
+    earlier data each week) -> forecast.wf_*; then coach value and coach vs coach."""
+    import logging
+
+    from courtvision import coaching, walkforward
+    from courtvision.db import connect
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    with connect() as con:
+        res = walkforward.run(con)
+        rel = coaching.value(con)["reliability"]
+    typer.echo(res["overall"].round(4).to_string(index=False))
+    typer.echo(f"\nchosen: {res['best']}\n")
+    typer.echo(res["players"].round(3).to_string(index=False))
+    typer.echo(rel.round(3).to_string(index=False))
+
+
 @app.command("app")
 def run_app(port: int = typer.Option(8501, help="Port for the Streamlit server.")) -> None:
     """Open the visualizer (Streamlit): team, game, player and live views."""
@@ -321,7 +383,7 @@ def build(
     workers: int | None = typer.Option(None, help="Parallel play-by-play workers."),
 ) -> None:
     """Rebuild everything from the raw caches: kaggle-load -> nba-api load -> metrics ->
-    salaries -> market."""
+    salaries -> market -> coaches -> coaching -> walk-forward -> forecast."""
     from courtvision.db import connect
     from courtvision.ingest import nba_api_pull
 
@@ -337,6 +399,13 @@ def build(
         market_build(season=None)
     else:
         typer.echo("no salary cache: run `courtvision ingest salaries` for the market model")
+    if _has_coach_files():
+        ingest_coaches(download=False)
+        coaching_cmd()
+        walkforward_cmd()
+    else:
+        typer.echo("no coach cache: run `courtvision ingest coaches` for coaching and the "
+                   "walk-forward model")  # fmt: skip
     forecast_cmd()
 
 

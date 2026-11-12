@@ -425,10 +425,26 @@ def build(con: duckdb.DuckDBPyConnection) -> dict:
     g = bt["games"].dropna(subset=["blend_form"])
     best = g.loc[g.brier.idxmin()]
     res = predict(con, season, float(best.blend_form), float(best.sigma))
+    lines = pd.DataFrame()
+    has_wf = con.execute("select count(*) from information_schema.tables where "
+                         "table_schema = 'forecast' and table_name = 'margin_model'"
+                         ).fetchall()[0][0]  # fmt: skip
+    if has_wf and not res["games"].empty:
+        # the walk-forward-tested model replaces the blend for margin and win chance (it
+        # adds rest and back-to-backs), and adds each player's stat line with a range
+        from courtvision.walkforward import live
+
+        wf = live(con, season, res["games"])
+        gm = res["games"].rename(columns={"pred_margin": "blend_margin",
+                                          "home_win_prob": "blend_win_prob"})  # fmt: skip
+        res["games"] = gm.merge(wf["games"].drop(columns=["pace"]), on="game_id", how="left")
+        lines = wf["players"]
     con.execute("create schema if not exists forecast")
     for name, df in (("games", res["games"]), ("team", res["team"]),
                      ("players", res["players"]), ("backtest_team", bt["team"]),
-                     ("backtest_games", bt["games"])):  # fmt: skip
+                     ("backtest_games", bt["games"]), ("player_lines", lines)):  # fmt: skip
+        if df.empty and name == "player_lines":
+            continue
         con.register("tmp_df", df)
         con.execute(f"create or replace table forecast.{name} as select * from tmp_df")
         con.unregister("tmp_df")
