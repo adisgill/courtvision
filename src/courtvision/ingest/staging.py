@@ -195,6 +195,137 @@ select
     s.description
 from s
 left join stg.player_games pg on pg.game_id = s.game_id and pg.person_id = s.person_id;
+
+-- One row per play-by-play event, both schemas normalized into one vocabulary so that
+-- possession counting and lineup reconstruction (courtvision.metrics.pbp) can treat every
+-- season alike.
+--   seq        chronological order within the game. Live-format games use orderNumber.
+--              Legacy actionNumber is out of clock order for ~0.4% of events, so legacy
+--              games sort by (period, clock descending, actionNumber).
+--   etype      fga / ft / reb / tov / foul / sub / jump / viol / timeout / period_start /
+--              period_end / other
+--   team_id    repaired: teamId, else playerteamId (2026-27 has only this), else a team id
+--              stored in personId (legacy team events), else the player's box-score team,
+--              else (live team rebounds/turnovers with no team) the possession column.
+--   person_id  players only (team ids and 0 removed).
+create or replace view stg.events as
+with raw as (
+    select
+        p.*,
+        lower(trim(p.actionType)) as act,
+        trim(p.subType)           as sub,
+        bool_or(p.actionType in ('2pt', '3pt')) over (partition by p.game_id) as is_live,
+        cv_clock_s(p.clock)       as clock_s,
+        case when cv_is_team_id(p.personId) or p.personId in ('0', '') then null
+             else try_cast(p.personId as bigint) end as player_id
+    from stg.pbp p
+), typed as (
+    select
+        r.*,
+        case
+            when r.act in ('made shot', 'missed shot', '2pt', '3pt') then 'fga'
+            when r.act in ('free throw', 'freethrow') then 'ft'
+            when r.act = 'rebound' then 'reb'
+            when r.act = 'turnover' then 'tov'
+            when r.act = 'foul' then 'foul'
+            when r.act = 'substitution' then 'sub'
+            when r.act in ('jump ball', 'jumpball') then 'jump'
+            when r.act = 'violation' then 'viol'
+            when r.act = 'timeout' then 'timeout'
+            when r.act = 'period' and lower(r.sub) = 'start' then 'period_start'
+            when r.act = 'period' and lower(r.sub) = 'end' then 'period_end'
+            else 'other'
+        end as etype
+    from raw r
+)
+select
+    t.game_id,
+    t.season,
+    t.season_type,
+    case when t.is_live then 'live' else 'legacy' end as pbp_format,
+    row_number() over (
+        partition by t.game_id
+        order by t.period,
+                 case when t.is_live then 0 else -t.clock_s end,
+                 case when t.is_live then coalesce(t.orderNumber, t.actionNumber)
+                      else t.actionNumber end
+    )                                                  as seq,
+    t.actionNumber                                     as action_number,
+    t.period,
+    t.clock_s,
+    cv_period_start_s(t.period) + cv_period_len_s(t.period) - t.clock_s as elapsed_s,
+    t.etype,
+    coalesce(
+        case when cv_is_team_id(t.teamId) then try_cast(t.teamId as bigint) end,
+        case when cv_is_team_id(t.playerteamId) then try_cast(t.playerteamId as bigint) end,
+        case when cv_is_team_id(t.personId) then try_cast(t.personId as bigint) end,
+        pg.team_id,
+        case when t.is_live and t.etype in ('reb', 'tov') and cv_is_team_id(t.possession)
+             then try_cast(t.possession as bigint) end
+    )                                                  as team_id,
+    t.player_id                                        as person_id,
+    t.playerName                                       as player_name,
+    -- shots
+    case
+        when t.etype <> 'fga' then null
+        when t.act = '3pt' then 3
+        when t.act = '2pt' then 2
+        when t.shotValue in (2, 3) then t.shotValue
+        when t.description ilike '%3PT%' then 3
+        else 2
+    end                                                as shot_value,
+    case
+        when t.etype = 'fga' and not t.is_live then t.act = 'made shot'
+        when t.etype = 'fga' then t.shotResult ilike '%made'
+        -- legacy FTs carry an empty shotResult; the description starts with MISS on a miss
+        when t.etype = 'ft' and t.is_live then t.shotResult ilike '%made'
+        when t.etype = 'ft' then not (t.description ilike 'MISS%')
+    end                                                as made,
+    case when t.etype = 'fga' then t.xLegacy end       as x_legacy,
+    case when t.etype = 'fga' then t.yLegacy end       as y_legacy,
+    -- free throws: technical FTs do not belong to a possession
+    case when t.etype = 'ft'
+         then t.sub ilike '%technical%' or coalesce(t.descriptor, '') ilike 'technical' end
+                                                       as ft_technical,
+    -- last free throw of an ordinary trip (n of n), after which the other team gets the
+    -- ball; flagrant / clear-path / away-from-play / take trips keep the ball, so excluded
+    case when t.etype = 'ft' then
+        regexp_extract(t.sub, '(\\d) ?of ?(\\d)', 1) <> ''
+        and regexp_extract(t.sub, '(\\d) ?of ?(\\d)', 1)
+            = regexp_extract(t.sub, '(\\d) ?of ?(\\d)', 2)
+        and not regexp_matches(lower(t.sub || ' ' || coalesce(t.descriptor, '')),
+                               'technical|flagrant|clear|away|take')
+    end                                                as ft_last,
+    -- rebounds: the live schema labels them; legacy kind is derived in courtvision.metrics.pbp
+    case when t.etype = 'reb' and lower(t.sub) in ('offensive', 'defensive')
+         then left(lower(t.sub), 3) end                as reb_kind,
+    -- fouls and other events that a bench player can be charged with
+    t.etype = 'foul' and t.sub ilike '%technical%' or t.act = 'ejection' as bench_possible,
+    -- substitutions: live has one row per player ('in' / 'out'); legacy has one row per
+    -- swap, personId = player out, player in only by name in 'SUB: <in> FOR <out>'.
+    -- 210 early 2019-20 games use a third form, one 'out' row per swap ("X replaced by Y")
+    -- carrying the player in as subsInPersonId.
+    case when t.etype = 'sub' and try_cast(nullif(t.subsInPersonId, '0') as bigint) is not null
+              then 'swap'
+         when t.etype = 'sub' and t.is_live then lower(t.sub)
+         when t.etype = 'sub' then 'swap' end          as sub_dir,
+    case when t.etype = 'sub' then try_cast(nullif(t.subsInPersonId, '0') as bigint) end
+                                                       as sub_in_person_id,
+    case when t.etype = 'sub' and not t.is_live
+         then trim(regexp_extract(t.description, '^SUB: (.+) FOR (.+)$', 1)) end
+                                                       as sub_in_name,
+    case when t.etype = 'sub' and not t.is_live
+         then trim(regexp_extract(t.description, '^SUB: (.+) FOR (.+)$', 2)) end
+                                                       as sub_out_name,
+    try_cast(nullif(t.assistPersonId, '0') as bigint)    as assist_person_id,
+    try_cast(nullif(t.stealPersonId, '0') as bigint)     as steal_person_id,
+    try_cast(nullif(t.blockPersonId, '0') as bigint)     as block_person_id,
+    try_cast(nullif(t.foulDrawnPersonId, '0') as bigint) as foul_drawn_person_id,
+    case when cv_is_team_id(t.possession) then try_cast(t.possession as bigint) end
+                                                       as possession_team_id,
+    t.description
+from typed t
+left join stg.player_games pg on pg.game_id = t.game_id and pg.person_id = t.player_id;
 """
 
 

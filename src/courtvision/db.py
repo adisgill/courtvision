@@ -34,6 +34,27 @@ create or replace macro cv_season_type(gid) as
     end;
 create or replace macro cv_season_label(season) as
     cast(season as varchar) || '-' || lpad(cast((season + 1) % 100 as varchar), 2, '0');
+create or replace macro cv_is_team_id(i) as try_cast(i as bigint) between 1610612737 and 1610612766;
+-- Court zone from the recorded shot value and legacy coordinates (tenths of a foot, rim at
+-- the origin). Reproduces the official SHOT_ZONE_BASIC on 99.99% of 2025-26 shots; see
+-- docs/metrics_spec.md section 1. 'BACK' (backcourt heaves) is excluded from rated zones.
+create or replace macro cv_zone(v, x, y) as
+    case
+        when x is null or y is null then null
+        when v = 3 and y > 417.5 then 'BACK'
+        when v = 3 and abs(x) >= 220 and y <= 87 then 'C3'
+        when v = 3 then 'ATB3'
+        when sqrt(x * x + y * y) < 40 then 'RA'
+        when abs(x) <= 80 and y <= 138 then 'PAINT'
+        else 'MID'
+    end;
+-- Seconds left in the period from an ISO-8601 clock such as 'PT11M56.00S'.
+create or replace macro cv_clock_s(c) as
+    regexp_extract(c, 'PT(\\d+)M', 1)::int * 60 + regexp_extract(c, 'M([\\d.]+)S', 1)::double;
+-- Game seconds elapsed at the start of a period (12-minute quarters, 5-minute overtimes).
+create or replace macro cv_period_start_s(p) as
+    case when p <= 4 then (p - 1) * 720 else 2880 + (p - 5) * 300 end;
+create or replace macro cv_period_len_s(p) as case when p <= 4 then 720 else 300 end;
 """
 
 
