@@ -117,6 +117,72 @@ def audit_nba_api(
     typer.echo(body)
 
 
+metrics_app = typer.Typer(help="Build ratings (docs/metrics_spec.md).", no_args_is_help=True)
+app.add_typer(metrics_app, name="metrics")
+
+
+@metrics_app.command("build")
+def metrics_build(
+    season: list[int] = typer.Option(
+        [], help="Re-parse only these seasons' play-by-play (repeatable); default all."
+    ),
+    skip_pbp: bool = typer.Option(False, help="Reuse the existing play-by-play parse."),
+    workers: int | None = typer.Option(None, help="Parallel play-by-play workers."),
+) -> None:
+    """Possessions, lineups, counts, baselines, ratings -> metrics.* and data/parquet/metrics.
+
+    League baselines, reference distributions and shrinkage are always rebuilt over all
+    seasons, so ``--season`` only limits which seasons' play-by-play is re-parsed.
+    """
+    import logging
+
+    from courtvision.db import connect
+    from courtvision.metrics import build
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    paths = get_paths()
+    with connect() as con:
+        starts = build.build_all(
+            con, paths.data, paths.kaggle_raw, seasons=season or None, workers=workers,
+            skip_pbp=skip_pbp,
+        )  # fmt: skip
+        summary = con.execute(
+            "select level, count(*) from metrics.ratings_long group by 1 order by 1"
+        ).fetchall()
+    typer.echo(f"tier start seasons: {starts}")
+    for level, n in summary:
+        typer.echo(f"{n:>12,}  ratings ({level})")
+
+
+@app.command()
+def build(
+    workers: int | None = typer.Option(None, help="Parallel play-by-play workers."),
+) -> None:
+    """Rebuild everything from the raw caches: kaggle-load -> nba-api load -> metrics."""
+    from courtvision.db import connect
+    from courtvision.ingest import nba_api_pull
+
+    kaggle_load()
+    paths = get_paths()
+    with connect() as con:
+        for s in _cached_nba_api_seasons(paths.nba_api_raw):
+            nba_api_pull.load(con, paths.nba_api_raw, paths.parquet / "nba_api", s)
+            typer.echo(f"nba_api {s} loaded from cache")
+    metrics_build(season=[], skip_pbp=False, workers=workers)
+
+
+def _cached_nba_api_seasons(cache_dir) -> list[int]:
+    """Seasons with a cached league game log (``Season-2025-26_...`` cache keys)."""
+    import re
+
+    found = set()
+    for f in (cache_dir / "leaguegamelog").glob("*.json.gz") if cache_dir.exists() else []:
+        m = re.search(r"Season-(\d{4})-\d{2}", f.name)
+        if m:
+            found.add(int(m.group(1)))
+    return sorted(found)
+
+
 @ingest_app.command("kaggle")
 def kaggle_all(
     version: int | None = typer.Option(None, help="Pin a Kaggle dataset version."),

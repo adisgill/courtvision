@@ -46,6 +46,7 @@ testpaths = ["tests"]
 addopts = "-q"
 markers = [
     "network: test hits a live external API (deselected by default)",
+    "integration: needs the built database (`courtvision metrics build`); skipped otherwise",
 ]
 
 [tool.ruff]
@@ -58,3 +59,8 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.ruff.lint.flake8-bugbear]
 extend-immutable-calls = ["typer.Option", "typer.Argument"]
+
+[tool.ruff.lint.per-file-ignores]
+# One formula per line reads better than wrapped SQL fragments.
+"src/courtvision/metrics/measures.py" = ["E501"]
+"src/courtvision/metrics/sql.py" = ["E501"]
