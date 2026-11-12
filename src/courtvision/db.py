@@ -50,3 +50,8 @@ def connect(path: Path | None = None, *, read_only: bool = False) -> duckdb.Duck
 def sql_path(p: Path) -> str:
     """A filesystem path as a single-quoted SQL string literal."""
     return "'" + p.resolve().as_posix().replace("'", "''") + "'"
+
+
+def sql_glob(directory: Path, pattern: str) -> str:
+    """``directory/pattern`` as a SQL string literal (no resolve() on the wildcard)."""
+    return "'" + (directory.resolve() / pattern).as_posix().replace("'", "''") + "'"

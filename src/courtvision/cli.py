@@ -47,6 +47,34 @@ def kaggle_load() -> None:
     typer.echo("stg.* views rebuilt")
 
 
+@ingest_app.command("nba-api")
+def nba_api(
+    season: int = typer.Option(..., help="Season start year, e.g. 2025 for 2025-26."),
+    season_type: list[str] = typer.Option(
+        ["regular", "play_in", "playoffs"], help="regular / play_in / playoffs (repeatable)."
+    ),
+    load_only: bool = typer.Option(False, help="Skip the network; rebuild from the cache."),
+    min_interval: float = typer.Option(1.0, help="Minimum seconds between requests."),
+) -> None:
+    """Pull one season (game log, shots, play-by-play, rotations) and load it into DuckDB."""
+    import logging
+
+    from courtvision.db import connect
+    from courtvision.ingest import nba_api_pull
+    from courtvision.ingest.nba_api_client import CachedClient
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    paths = get_paths()
+    if not load_only:
+        client = CachedClient(cache_dir=paths.nba_api_raw, min_interval=min_interval)
+        summary = nba_api_pull.pull(client, season, season_type)
+        typer.echo(f"pulled: {summary}")
+    with connect() as con:
+        counts = nba_api_pull.load(con, paths.nba_api_raw, paths.parquet / "nba_api", season)
+    for name, n in counts.items():
+        typer.echo(f"{n:>10,}  nba_api.{name} ({season})")
+
+
 @ingest_app.command("kaggle")
 def kaggle_all(
     version: int | None = typer.Option(None, help="Pin a Kaggle dataset version."),
