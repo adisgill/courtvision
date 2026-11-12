@@ -1,6 +1,6 @@
 """courtvision visualizer: ``uv run courtvision app``.
 
-League, team, game, player, market and live views over the built ratings. Every chart is
+League, upcoming, team, game, player, coaches, market and live views. Every chart is
 interactive: hover for numbers, and click a team or a player to open its page. Read-only
 over ``data/courtvision.duckdb``; run ``courtvision build`` first.
 """
@@ -710,9 +710,15 @@ def upcoming_view() -> None:
     upcoming_page.render(_con(), team_label, short_team, _players(), _theme(), goto)
 
 
+def coaches_view() -> None:
+    from courtvision.app import coaches_page
+
+    coaches_page.render(_con(), team_label, _theme(), goto)
+
+
 VIEWS = {"League": league_view, "Upcoming": upcoming_view, "Team": team_view,
-         "Game": game_view, "Player": player_view, "Market": market_view,
-         "Live": live_view}  # fmt: skip
+         "Game": game_view, "Player": player_view, "Coaches": coaches_view,
+         "Market": market_view, "Live": live_view}  # fmt: skip
 
 st.sidebar.title("courtvision")
 choice = st.sidebar.radio("View", list(VIEWS), key="view")
