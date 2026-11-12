@@ -125,6 +125,7 @@ OUTPUT_TABLES = (
     "reference_stats", "team_game", "team_season", "player_game", "player_season",
     "presence_season", "presence_rolling", "lineup_qa_summary", "build_info",
     "team_game_counts", "player_game_counts", "ratings_long",
+    "player_impact", "impact_lambda", "impact_cv", "team_season_adj", "player_role",
 )  # fmt: skip
 
 
@@ -188,6 +189,38 @@ left join metrics.presence_season_counts c using (season, season_type, person_id
     _run(con, "presence_rolling", rate.presence_rolling_sql())
     _run(
         con,
+        "player_role",
+        """
+-- Role context (v1.1, not rated): usage = share of the team's plays a player finishes
+-- while on court; assist % = share of teammates' field goals he assisted while on court.
+-- Only games with rebuilt lineups, so box and on-court counts cover the same minutes.
+create or replace table metrics.player_role as
+with g as (
+    select * from metrics.player_game_counts where sec_on is not null
+), s as (
+    select season, season_type, person_id, team_id, sum(minutes) as minutes,
+           sum(b_fga + 0.44 * b_fta + b_tov) as plays, sum(fga + 0.44 * fta + tov) as tm_plays,
+           sum(b_ast) as ast, sum(fgm - b_fgm) as tm_fgm_other, sum(poss) as poss
+    from g group by all
+    union all
+    select season, season_type, person_id, 0, sum(minutes),
+           sum(b_fga + 0.44 * b_fta + b_tov), sum(fga + 0.44 * fta + tov),
+           sum(b_ast), sum(fgm - b_fgm), sum(poss)
+    from g group by season, season_type, person_id
+)
+select season, season_type, person_id, team_id, minutes, poss,
+       plays / nullif(tm_plays, 0) as usage, ast / nullif(tm_fgm_other, 0) as ast_pct
+from s;
+""",
+    )
+    from courtvision.metrics import adjust, impact
+
+    log.info("per-possession impact (adjusted plus-minus)")
+    impact.build(con)
+    log.info("opponent-adjusted team ratings")
+    adjust.build(con)
+    _run(
+        con,
         "lineup_qa_summary",
         """
 create or replace table metrics.lineup_qa_summary as
@@ -228,7 +261,7 @@ def write_build_info(con: duckdb.DuckDBPyConnection, kaggle_raw: Path, starts: d
         "git_dirty": dirty,
         "kaggle_downloaded_at_utc": kaggle.get("downloaded_at_utc"),
         "kaggle_version": kaggle.get("requested_version"),
-        "spec": "docs/metrics_spec.md v1.0",
+        "spec": "docs/metrics_spec.md v1.1",
         "tier_starts": json.dumps(starts),
     }
     cols = ", ".join(f"? as {k}" for k in info)
