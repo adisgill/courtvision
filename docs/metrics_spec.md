@@ -1,22 +1,25 @@
 # Metrics spec
 
-**Status: DRAFT v0.1 for review. No metric code exists yet.** Everything below
-is a proposal grounded in [`data_audit.md`](data_audit.md); section 0 lists
-the decisions that need your call before implementation starts.
+**Status: v1.0, approved 2026-11-12 with every recommended decision (D1–D9).**
+Implemented in `src/courtvision/metrics/`; `uv run courtvision metrics build`
+reproduces every number. Section 10 records what implementation added or
+settled beyond the draft; section 8 has the acceptance-test results. Grounded in
+[`data_audit.md`](data_audit.md).
 
-Contents: [0 Decisions](#0-decisions-needed) ·
+Contents: [0 Decisions](#0-decisions) ·
 [1 Conventions](#1-conventions) · [2 Scale](#2-the-0100-scale) ·
 [3 Roll-up](#3-roll-up-player--game--team--season) ·
 [4 Shrinkage](#4-small-sample-shrinkage) · [5 Dimensions](#5-the-six-dimensions) ·
 [6 Availability](#6-availability-by-era) · [7 Outputs & CLI](#7-outputs-and-the-cli) ·
-[8 Acceptance tests](#8-acceptance-tests) · [9 Out of scope](#9-out-of-scope-for-v1)
+[8 Acceptance tests](#8-acceptance-tests) · [9 Out of scope](#9-out-of-scope-for-v1) ·
+[10 Implementation notes](#10-implementation-notes-v10)
 
 ---
 
-## 0. Decisions needed
+## 0. Decisions
 
-Each has a recommendation; the rest of the spec is written assuming the
-recommendation, and marks the places that change if you choose otherwise.
+All nine were approved as recommended (2026-11-12). The table is kept as the
+record of what was decided and why.
 
 | # | Decision | Options | Recommendation |
 |---|---|---|---|
@@ -246,14 +249,14 @@ For the unit's defensive possessions, opponent counts are prefixed `o`.
 | Shot making allowed `DM` | `100 · r · ( − Σ_opp (v·m − xP) / oFGA )` |
 | Forced turnovers `DT` | `100 · ( oTOV / oPOSS − lgTOVr_s ) · lgPPNT_s` |
 | Fouls `DF` | `100 · r · ( lgFTr_s − oFTA / oFGA ) · lgFT%_s` |
-| Defensive rebounding `DR` *(D3)* | `100 · ( DREB% − lgDREB%_s ) · ( oMissedFGA / oPOSS ) · lgPPP_s` |
+| Defensive rebounding `DR` *(D3)* | `100 · ( DREB − lgDREB%_s · (DREB + oOREB) ) / oPOSS · lgPPP_s` |
 | **Defense** | `DQ + DM + DT + DF (+ DR)` |
 
 League constants per season: `lgTOVr` = TOV/POSS; `lgPPNT` = points per
 non-turnover possession; `lgFTr` = FTA/FGA; `lgFT%`; `lgDREB%`; `lgPPP` =
 points per possession. `oTOV` includes the opponent's team turnovers.
 
-`DR` values a defensive rebound at roughly one possession. It's an
+`DR` counts defensive rebounds above what the league rate would collect from the unit's rebound chances (its defensive rebounds plus the opponent's offensive rebounds) and values each at one possession. It's an
 approximation, labelled as such, and the reason it is a switchable component.
 
 * **Inputs:** `stg.shots` (opponent), box TOV / FTA / REB, stints for player level.
@@ -291,7 +294,7 @@ D3), and A/TO and assist rate are supporting sub-ratings.
 | Component | Formula |
 |---|---|
 | Turnover avoidance `BT` (per 100 plays) | `100 · ( lgTOVp_s − TOV / PLAYS ) · lgPPNT_s` |
-| Offensive rebounding `BO` *(D3, per 100 poss.)* | `100 · ( OREB% − lgOREB%_s ) · ( MissedFGA / POSS ) · lgPPP_s` |
+| Offensive rebounding `BO` *(D3, per 100 poss.)* | `100 · ( OREB − lgOREB%_s · (OREB + oDREB) ) / POSS · lgPPP_s` |
 | **Ball control** | `BT (+ BO)` |
 | Supporting: shot-ending rate | `1 − TOV / PLAYS` (identical information to `BT`; reported because it's the brief's framing) |
 | Supporting: A/TO | `ln( (AST + 0.5) / (TOV + 0.5) )` relative to league, rated separately |
@@ -411,12 +414,18 @@ baselines entirely.
 
 ## 7. Outputs and the CLI
 
-Planned (not built yet). One command rebuilds everything from the raw caches:
+One command rebuilds everything from the raw caches (about 7 minutes on an
+8-core machine: 2 for play-by-play parsing, 5 for SQL):
 
 ```bash
-uv run courtvision build              # kaggle-load → nba-api load → metrics, all seasons
-uv run courtvision metrics build --season 2025   # one season
+uv run courtvision build                         # kaggle-load → nba-api load → metrics
+uv run courtvision metrics build                 # metrics only, from the loaded sources
+uv run courtvision metrics build --season 2025   # re-parse one season's play-by-play
 ```
+
+League baselines, reference distributions and shrinkage constants span all
+seasons, so `--season` limits only the play-by-play re-parse; the SQL stage
+always runs in full.
 
 Tables (schema `metrics`, also written to `data/parquet/metrics/`):
 
@@ -424,11 +433,15 @@ Tables (schema `metrics`, also written to `data/parquet/metrics/`):
 |---|---|---|
 | `league_baselines` | season | every league constant used above |
 | `zone_baselines` | season × zone | FGA, share, FG%, xPTS |
-| `shrinkage_constants` | dimension × level | *k_d*, *r*, *n̄* (§4) |
-| `team_game`, `team_season` | team × game / season | exposures, every component (raw), composites (raw), ratings, `tier` |
-| `player_game`, `player_season` | player × game / season (× team) | same, plus `low_sample`, position weights |
-| `presence_season`, `presence_rolling` | player × team × season / window | on, off, Δ per dimension, composite, rating |
-| `build_info` | one row | git commit, Kaggle manifest timestamp, nba_api cache summary, spec version |
+| `shrinkage_constants` | tier × measure | *k*, split-half *r*, mean half exposure (§4) |
+| `reference_stats`, `best_tier` | level × season × tier × measure | μ, σ and size of each reference population; the tier shown in wide tables |
+| `ratings_long` | unit × tier × measure | every value (raw and shrunk), exposure, `low_sample`, rating, all tiers |
+| `team_game`, `team_season`, `player_season` | unit | wide: `<measure>_value / _rating / _tier / _low_sample` for every measure, best tier |
+| `player_game` | player × game | wide, headline dimensions only (components are in `ratings_long`) |
+| `team_game_counts`, `player_game_counts` | unit | the additive counts every value is computed from |
+| `presence_season`, `presence_rolling` | player × team × season / last 10 and 20 games | Δ per dimension, composite, rating (season), box net on/off |
+| `lineup_qa_summary`, `stat_first_season` | season / stat | lineup and play-by-play QA rates; D9 availability |
+| `build_info` | one row | git commit, Kaggle download time, spec version, tier start seasons |
 
 `build_info` ties every rating to the exact code and data snapshot that
 produced it.
@@ -440,12 +453,12 @@ Before any rating is trusted:
 | # | Test | Threshold | Status |
 |---|---|---|---|
 | T1 | Zone rule vs official `SHOT_ZONE_BASIC` | ≥ 99.9% | **Pass.** 99.992% on 2025-26, 99.94% on 2005-06. 1996-97 is 89.6% because official zones use today's arc while 1994-95 to 1996-97 had a 22 ft line; the rule follows the recorded shot value, which is correct (see data audit) |
-| T2 | PBP-counted `POSS` vs Kaggle's official `possessions` (team-game, 1996-97+) | MAE ≤ 0.5 | to do. (Box formula already measured: MAE 2.5 with 0.44, 1.7 with 0.40, which is why tier A counts instead) |
-| T3 | Reconstructed stints vs `gamerotation` (2025-26) | ≥ 99% of player-games within 1 min; on-court five exact for ≥ 98% of events | to do |
-| T4 | Roll-up identities (§3) | exact to 1e-9 | unit tests |
-| T5 | Team-season ratings per season | mean 50 ± 0.5 | unit test |
-| T6 | Hand-checked games | 3 games of 2025-26 computed by hand in a fixture | next step |
-| T7 | Tier A vs tier B correlation (1996-97+) | reported, not gated | validation notebook |
+| T2 | PBP-counted `POSS` vs Kaggle's official `possessions` (team-game, 1996-97+) | MAE ≤ 0.5 | **Pass overall: MAE 0.28**, bias +0.14, 77% exact, 97% within 1 (76,328 team-games). 2002-03 on: 0.17–0.29 every season except 2017-18 (0.44). Over threshold: 1996-97 (0.55), 1997-98 (0.53), 1999-00 (0.50); 1998-99 to 2001-02 run 0.48–0.50, overcounting by ~0.4 from early-legacy event logging. The box formula was 2.5. |
+| T3 | Reconstructed stints vs `gamerotation` (2025-26) | ≥ 99% of player-games within 1 min; on-court five exact for ≥ 98% of events | **Pass.** 99.53% of 28,698 player-games within 1 minute (MAE 0.16 min); 99.47% of 1.06M team-events have the exact official five. All seasons: lineups pass QA in 98.8% of games (`lineup_qa_summary`) |
+| T4 | Roll-up identities (§3) | exact to 1e-9 | **Pass** (`tests/test_metrics_integration.py`): season = Σ games; team shots = Σ player shots; on-court = 5 × team; team Defense = exposure-weighted mean of players'; Backcourt players sum to team |
+| T5 | Team-season ratings per season | mean 50 ± 0.5 | **Pass** for every season, tier and measure |
+| T6 | Hand-checked games | 3 games of 2025-26 computed by hand | **Pass.** Shooting (SQ, SM) from nba_api's official shot zones and league rates, Ball control `BT` from the official box score, Defense `DT`/`DF` from the official box score and possessions; an independent source from the Kaggle play-by-play the pipeline uses |
+| T7 | Tier A vs tier B correlation (1996-97+) | reported, not gated | [`validation.md`](validation.md) section 4 |
 
 ## 9. Out of scope for v1
 
@@ -454,3 +467,111 @@ Opponent-strength adjustment, RAPM, shot-type-aware expected points
 for Shooting), shot-clock context, and anything needing player-tracking data.
 **No metric here needs player (x, y) positions:** zones come from shot
 locations, which are event data.
+
+## 10. Implementation notes (v1.0)
+
+What building it settled that the draft left open. Code references are to
+`src/courtvision/metrics/`.
+
+**Event stream (`stg.events`).** Both play-by-play schemas are normalized into one
+vocabulary (`fga`, `ft`, `reb`, `tov`, `foul`, `sub`, ...). Legacy games are
+ordered by (period, clock descending, `actionNumber`), because `actionNumber` is
+out of clock order for about 0.4% of legacy events; live games use
+`orderNumber`. Team ids are repaired from `teamId`, then `playerteamId` (the only
+team column in 2026-27), then a team id stored in `personId` (legacy team
+events), then the player's box-score team, then the live `possession` column
+(team rebounds and turnovers in the 2025-26 playoffs and 2026-27).
+
+**Possessions (`pbp.py`).** A possession is a run of events with the same
+offensive team inside a period. Offense is named only by events the team with
+the ball can produce: shot attempts, non-technical free throws, turnovers and
+rebounds. Two period-end rules came out of acceptance test T2:
+
+* after the period's last made basket, last free throw of a trip, or turnover,
+  the other team is credited a possession even though nothing else is logged,
+  because the official count includes it;
+* in the legacy schema only, a period-ending run made of nothing but team
+  rebounds (a missed heave rebounded at the buzzer) is not a possession. The
+  official count for live-schema seasons does include it.
+
+**Lineups.** Period starters are players whose first involvement in the period
+is anything other than entering. Anyone still missing is filled from the
+previous period's closing five, then by box minutes. Legacy substitutions name
+the player coming in only by text, so the name is resolved in this order:
+
+1. the name the same game's own substitution rows print for that player when he
+   leaves (this also covers renamed players, e.g. Enes Kanter, now Freedom);
+2. the play-by-play player name;
+3. roster last name, then first name ("Nene");
+4. abbreviated first name plus last name ("J. Smith", "Ja. Smith");
+5. matching every word of the name.
+
+210 early-2019-20 games use a third format ("X replaced by Y") that carries the
+incoming player's id. A game's lineups pass QA when:
+
+* both teams have exactly five players on the floor at every event;
+* every substitution resolves;
+* every player's minutes are within one minute of the box score.
+
+The result is 98.8% of 38,183 games, at least 95.5% in every season
+(`metrics.lineup_qa_summary`). On-court metrics (player Defense, `BO`,
+Backcourt/Frontcourt defense parts, Presence) use passing games only.
+
+**Play-by-play completeness.** A game is used for tier A only when both teams'
+play-by-play points and field-goal attempts are within 3 of the box score. More
+than 99% of team-games pass every season. The failures are a few 2019-20 games
+truncated in the source.
+
+**Credited defensive events.** Steals and fouls for Backcourt/Frontcourt and the
+supporting Defense sub-ratings come from the box score, because legacy
+play-by-play has no steal person.
+
+**Player-level Backcourt/Frontcourt.** A player's value is his share of the
+team's:
+
+* his own position-weighted shooting, turnovers, steals and fouls;
+* one fifth (`share = 0.2`) of the on-court zone-defense part and rebounding
+  part.
+
+Both are expressed per 100 on-court possessions, so the five players on the
+floor sum exactly to the team. Box tier B player values are per 100 of the
+player's own plays.
+
+**Ball control constant.** `lgTOVp` includes team turnovers, so team values
+average exactly zero. Player values, which have no team turnovers, average about
++0.7. Player ratings are unaffected because each level has its own reference.
+
+**Presence.** Ball control on/off uses play-by-play turnovers and plays, so on and
+off are measured the same way. Backcourt/Frontcourt on/off has:
+
+* position-weighted shooting;
+* turnovers;
+* zone defense (and rebounding for Frontcourt).
+
+It has no credited steals or fouls, which aren't in the legacy play-by-play.
+Rolling windows (`presence_rolling`, last 10 and 20 games) are raw and unrated,
+like single games. The box-score net on/off is in `presence_season.presence_net_box`.
+
+**Season rows.** Season aggregates exist for the regular season and the playoffs.
+Play-in and Cup-final games are rated at game level only. Player-season rows are
+per team, plus a `team_id = 0` row for the whole season. Reference populations
+use the whole-season rows, so traded players count once.
+
+**Tiers in the outputs.** `metrics.ratings_long` keeps every tier, which gives
+T7 its overlap seasons. The wide tables (`team_game`, `player_season`, ...) show,
+for each measure, the best tier that exists in that season, with a `<measure>_tier`
+column. Tier start seasons are computed from the data under D9(a), not
+hard-coded, and they reproduce section 6:
+
+| Tier | Start |
+|---|---|
+| Shooting C | 1974 |
+| Ball control / Defense B− | 1983 |
+| Shooting / Defense / Backcourt-Frontcourt B | 1986 |
+| A | 1996 |
+
+**Rebounding as a ratio of sums.** The draft wrote `DR` and `BO` as (rebound-rate gap) × (misses per possession), a product of two ratios. Players' on-court values then don't average to the team's, which breaks the T4 identity. The v1.0 formulas in 5.2 and 5.3 count extra rebounds against the rebound chances actually available, which is linear in counts and exact under roll-up. The two forms differ only by using rebound chances instead of missed field goals as the opportunity count.
+
+**Shrinkage.** `k` is solved at the half-season exposure from `r = n_h / (n_h + k)`,
+which is algebraically the Spearman-Brown route in section 4. A measure whose
+halves don't correlate positively is shrunk fully to league average.
