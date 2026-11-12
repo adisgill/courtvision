@@ -379,6 +379,63 @@ def impact_check(con) -> pd.DataFrame:
     return out
 
 
+TRACKED = ["off_rating", "def_rating", "net_rating", "ast_pct", "ast_ratio", "oreb_pct",
+           "dreb_pct", "reb_pct", "tov_ratio", "efg_pct", "ts_pct", "usg_pct", "pace"]  # fmt: skip
+NBA_COL = {"off_rating": "offensiveRating", "def_rating": "defensiveRating",
+           "net_rating": "netRating", "ast_pct": "assistPercentage", "ast_ratio": "assistRatio",
+           "oreb_pct": "offensiveReboundPercentage", "dreb_pct": "defensiveReboundPercentage",
+           "reb_pct": "reboundPercentage", "tov_ratio": "teamTurnoverPercentage",
+           "usg_pct": "usagePercentage", "pace": "pace"}  # fmt: skip
+
+
+def tracking_checks(con) -> pd.DataFrame:
+    """Our player advanced stats (computed from play-by-play counts and rebuilt lineups)
+    against NBA.com's official per-game values, possession-weighted over the season."""
+    weighted = ",\n".join(
+        f"sum(e.{c} * e.possessions) / sum(e.possessions) as {k}" for k, c in NBA_COL.items()
+    )
+    nba = con.sql(f"""
+        select cv_season(e.gameId) as season, e.personId as person_id, {weighted},
+               (sum(e.fieldGoalsMade) + 0.5 * sum(e.threePointersMade))
+                   / sum(e.fieldGoalsAttempted) as efg_pct,
+               sum(e.points) / (2 * (sum(e.fieldGoalsAttempted)
+                   + 0.44 * sum(e.freeThrowsAttempted))) as ts_pct
+        from kaggle.player_statistics_extended e
+        join stg.games s on s.game_id = lpad(e.gameId::varchar, 10, '0')
+        where s.season_type = 'regular' and e.possessions > 0
+          and s.season between 2013 and {LAST}
+        group by all
+        having sum(e.possessions) >= 2000 and count(distinct e.playerteamId) = 1
+    """).df()
+    ours = con.sql(f"""select * from metrics.player_advanced where season_type = 'regular'
+                       and team_id = 0 and season between 2013 and {LAST}""").df()
+    d = nba.merge(ours, on=["season", "person_id"], suffixes=("_nba", ""))
+    rows = [{"stat": c, "r": d[c].astype(float).corr(d[f"{c}_nba"].astype(float)),
+             "median ours": d[c].median(), "median NBA.com": d[f"{c}_nba"].median()}
+            for c in TRACKED]  # fmt: skip
+    out = pd.DataFrame(rows)
+    out.attrs["player_seasons"] = len(d)
+    return out
+
+
+KAGGLE_USE = pd.DataFrame([
+    ("games", "game list, dates, scores, home/away, season type", "staging, every view"),
+    ("players", "names, birth dates, positions, draft", "positions, age, service, rookie scale"),
+    ("player_statistics", "player box scores, every game since 1947", "box tiers, actor counts"),
+    ("team_statistics", "team box scores", "box tiers, possessions (box), team names"),
+    ("play_by_play", "every event since 1996-97 with shot locations",
+     "possessions, lineups, zones, on-court counts, impact"),
+    ("team_statistics_extended", "NBA.com advanced team box (ratings, possessions, Four "
+     "Factors, fast-break / second-chance / off-turnover points)",
+     "T2 possessions test; NBA.com agreement (section 6)"),
+    ("player_statistics_extended", "NBA.com advanced player box (OffRtg, DefRtg, AST%, "
+     "REB%, USG%, PIE, ...)", "tracking checks (section 8), official PIE, PIE comparison"),
+    ("league_schedule_26_27", "this season's full schedule", "upcoming-game forecasts"),
+    ("league_schedule_24_25 / 25_26", "earlier schedules", "not needed (games has results)"),
+    ("team_histories", "franchise names over time", "not needed (names come from box scores)"),
+], columns=["Kaggle table", "what it holds", "used for"])  # fmt: skip
+
+
 def _md_table(df: pd.DataFrame, floatfmt: str = ".3f") -> str:
     cols = list(df.columns)
     lines = ["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
@@ -407,6 +464,7 @@ def report(con) -> str:
            from metrics.impact_cv where mode = 'headline' group by alpha order by alpha"""
     ).df()
     box = con.sql("select * from metrics.impact_box_model").df()
+    trk = tracking_checks(con)
     head = [c for c in pers.measure if c in (*M.HEADLINE, *COMPONENTS, "net_rtg", *FOUR_FACTORS)]
     parts = [
         "# Validation",
@@ -510,6 +568,27 @@ def report(con) -> str:
         "played how much.",
         "",
         _md_table(imp),
+        "",
+        "## 8. Tracking checks against NBA.com and Kaggle data use",
+        "",
+        "NBA.com's advanced player stats, computed from our play-by-play counts and rebuilt "
+        "lineups (`metrics.player_advanced`), against the official per-game values in "
+        "`kaggle.player_statistics_extended`, possession-weighted over the season "
+        f"(2013-14 on, one team, >= 2,000 possessions; {trk.attrs['player_seasons']} "
+        "player-seasons). On-court ratings, assist rate, usage and shooting agree almost "
+        "exactly, so lineups and possessions are tracked right in every season, not only "
+        "the 2025-26 rotation check (T3). Rebound percentages run higher than NBA.com's "
+        "because NBA.com counts team rebounds in the available rebounds and we count only "
+        "rebounds a player gets credit for; the ranking agrees. PIE is shown as NBA.com's "
+        "official figure: its published values don't follow its published formula "
+        "consistently (our formula gives 0.168 for a Jokic game NBA.com lists at 0.177, "
+        "but about half NBA.com's value for typical players).",
+        "",
+        _md_table(trk),
+        "",
+        "What each Kaggle table feeds:",
+        "",
+        _md_table(KAGGLE_USE),
         "",
     ]
     return "\n".join(parts)

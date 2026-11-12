@@ -163,6 +163,70 @@ def run_sql_stage(con: duckdb.DuckDBPyConnection, skip_base: bool = False) -> di
     return starts
 
 
+_ADV_SUMS = """sum(minutes) as minutes, sum(sec_on) as sec_on, sum(poss) as poss,
+           sum(o_poss) as o_poss, sum(pts_fg + ftm) as on_pts, sum(o_pts_fg + o_ftm) as on_opp,
+           sum(fga) as on_fga, sum(fta) as on_fta, sum(tov) as on_tov, sum(fgm) as on_fgm,
+           sum(oreb) as on_oreb, sum(dreb) as on_dreb, sum(o_oreb) as on_o_oreb,
+           sum(o_dreb) as on_o_dreb, sum(b_pts) as pts, sum(b_fgm) as fgm, sum(b_fga) as fga,
+           sum(b_fg3m) as fg3m, sum(b_ftm) as ftm, sum(b_fta) as fta, sum(b_oreb) as oreb,
+           sum(b_dreb) as dreb, sum(b_ast) as ast, sum(b_stl) as stl, sum(b_blk) as blk,
+           sum(b_tov) as tov, sum(b_pf) as pf"""
+
+# NBA.com's advanced box score, computed from our own counts (v1.3, spec 13.4): the same
+# definitions as stats.nba.com's "Advanced" player table, so validation can compare them
+# with the official numbers in kaggle.player_statistics_extended. On-court parts (ratings,
+# rebound shares, usage, assist %, pace) use the rebuilt lineups, so only games that pass
+# lineup QA count, for box and on-court alike.
+ADVANCED_SQL = f"""
+create or replace table metrics.player_advanced as
+with g as (
+    select * from metrics.player_game_counts where sec_on is not null
+),
+-- PIE: NBA.com's official per-game values, possession-weighted. Its published numbers
+-- don't follow its published formula consistently (validation section 8), so the
+-- official figure is shown rather than a replication that disagrees with it.
+nba_pie as (
+    select cv_season(e.gameId) as season, e.personId as person_id,
+           e.playerteamId as team_id,
+           sum(e.playerImpactEstimate * e.possessions) as pie_w, sum(e.possessions) as pie_n
+    from kaggle.player_statistics_extended e
+    where e.possessions > 0 and e.playerImpactEstimate is not null
+    group by all
+), pie as (
+    select n.season, s.season_type, n.person_id, n.team_id, n.pie_w, n.pie_n
+    from nba_pie n join (select distinct season, season_type, person_id, team_id
+                         from metrics.player_game_counts) s using (season, person_id, team_id)
+    union all
+    select n.season, s.season_type, n.person_id, 0, sum(n.pie_w), sum(n.pie_n)
+    from nba_pie n join (select distinct season, season_type, person_id, team_id
+                         from metrics.player_game_counts) s using (season, person_id, team_id)
+    group by n.season, s.season_type, n.person_id
+), s as (
+    select season, season_type, person_id, team_id, {_ADV_SUMS} from g group by all
+    union all
+    select season, season_type, person_id, 0 as team_id, {_ADV_SUMS}
+    from g group by season, season_type, person_id
+)
+select season, season_type, person_id, team_id, minutes, poss + o_poss as possessions,
+       100 * on_pts / nullif(poss, 0) as off_rating,
+       100 * on_opp / nullif(o_poss, 0) as def_rating,
+       100 * on_pts / nullif(poss, 0) - 100 * on_opp / nullif(o_poss, 0) as net_rating,
+       ast / nullif(on_fgm - fgm, 0) as ast_pct,
+       ast / nullif(tov, 0) as ast_to,
+       100 * ast / nullif(fga + 0.44 * fta + ast + tov, 0) as ast_ratio,
+       oreb / nullif(on_oreb + on_o_dreb, 0) as oreb_pct,
+       dreb / nullif(on_dreb + on_o_oreb, 0) as dreb_pct,
+       (oreb + dreb) / nullif(on_oreb + on_dreb + on_o_oreb + on_o_dreb, 0) as reb_pct,
+       100 * tov / nullif(fga + 0.44 * fta + ast + tov, 0) as tov_ratio,
+       (fgm + 0.5 * fg3m) / nullif(fga, 0) as efg_pct,
+       pts / nullif(2 * (fga + 0.44 * fta), 0) as ts_pct,
+       (fga + 0.44 * fta + tov) / nullif(on_fga + 0.44 * on_fta + on_tov, 0) as usg_pct,
+       48 * (poss + o_poss) / 2 / nullif(sec_on / 60, 0) as pace,
+       pie.pie_w / nullif(pie.pie_n, 0) as pie
+from s left join pie using (season, season_type, person_id, team_id);
+"""
+
+
 def run_outputs(con: duckdb.DuckDBPyConnection) -> None:
     """Presence and QA summary tables built from the ratings."""
     from courtvision.metrics import rate
@@ -213,6 +277,7 @@ select season, season_type, person_id, team_id, minutes, poss,
 from s;
 """,
     )
+    _run(con, "player_advanced", ADVANCED_SQL)
     from courtvision.metrics import adjust, impact
 
     log.info("per-possession impact (adjusted plus-minus)")
@@ -261,7 +326,7 @@ def write_build_info(con: duckdb.DuckDBPyConnection, kaggle_raw: Path, starts: d
         "git_dirty": dirty,
         "kaggle_downloaded_at_utc": kaggle.get("downloaded_at_utc"),
         "kaggle_version": kaggle.get("requested_version"),
-        "spec": "docs/metrics_spec.md v1.2",
+        "spec": "docs/metrics_spec.md v1.3",
         "tier_starts": json.dumps(starts),
     }
     cols = ", ".join(f"? as {k}" for k in info)
