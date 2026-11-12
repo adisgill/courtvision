@@ -1,0 +1,120 @@
+"""Read-only queries over the built ``metrics`` schema for the visualizer."""
+
+from __future__ import annotations
+
+import duckdb
+import pandas as pd
+
+from courtvision.config import get_paths
+
+HEADLINE = ["shooting", "defense", "ball_control", "backcourt", "frontcourt"]
+LABELS = {
+    "shooting": "Shooting",
+    "defense": "Defense",
+    "ball_control": "Ball control",
+    "backcourt": "Backcourt",
+    "frontcourt": "Frontcourt",
+    "presence": "Presence",
+}
+COMPONENT_LABELS = {
+    "shooting_sq": "Shot quality",
+    "shooting_sm": "Shot making",
+    "defense_dq": "Shot quality allowed",
+    "defense_dm": "Shot making allowed",
+    "defense_dt": "Forced turnovers",
+    "defense_df": "Fouls (FT rate allowed)",
+    "defense_dr": "Defensive rebounding",
+    "defense_dqm": "FG points allowed",
+    "ball_bt": "Turnover avoidance",
+    "ball_bo": "Offensive rebounding",
+    "backcourt_sh": "Guard shooting",
+    "backcourt_bt": "Guard ball security",
+    "backcourt_dz": "Perimeter defense",
+    "backcourt_dt": "Guard steals",
+    "backcourt_df": "Guard fouls",
+    "frontcourt_sh": "Big shooting",
+    "frontcourt_bt": "Big ball security",
+    "frontcourt_dz": "Paint defense",
+    "frontcourt_dt": "Big steals",
+    "frontcourt_df": "Big fouls",
+    "frontcourt_dr": "Defensive rebounding",
+    "defense_stl_rate": "Steals / 100 def. poss.",
+    "defense_blk_rate": "Blocks / 100 def. poss.",
+    "defense_pf_rate": "Fouls / 100 def. poss. (neg.)",
+    "ball_shot_end_rate": "Plays ending in a shot",
+    "ball_ato": "A/TO vs league (log)",
+    "ball_ast_rate": "Assisted FG share vs league",
+}
+ORDER = list(LABELS) + list(COMPONENT_LABELS)
+
+
+def ordered(measures) -> list[str]:
+    """Headline dimensions first, then components in a fixed order."""
+    rank = {m: i for i, m in enumerate(ORDER)}
+    return sorted(measures, key=lambda m: rank.get(m, len(rank)))
+
+
+def connect() -> duckdb.DuckDBPyConnection:
+    return duckdb.connect(str(get_paths().duckdb), read_only=True)
+
+
+def q(con: duckdb.DuckDBPyConnection, sql: str, params: list | None = None) -> pd.DataFrame:
+    return con.execute(sql, params or []).df()
+
+
+def seasons(con) -> list[int]:
+    return q(con, "select distinct season from metrics.team_season order by 1 desc").season.tolist()
+
+
+def team_names(con) -> pd.DataFrame:
+    """Team name per season (franchises move and rename)."""
+    return q(
+        con,
+        """select cv_season(gameId) as season, teamId as team_id,
+                  any_value(teamCity || ' ' || teamName) as team
+           from kaggle.team_statistics group by all""",
+    )
+
+
+def player_names(con) -> pd.DataFrame:
+    return q(
+        con,
+        "select person_id, trim(coalesce(first_name, '') || ' ' || last_name) as player "
+        "from stg.players",
+    )
+
+
+def ratings(con, level: str, where: str, params: list) -> pd.DataFrame:
+    """Long ratings (best tier per season) for one level."""
+    return q(
+        con,
+        f"""select r.* from metrics.ratings_long r
+            join metrics.best_tier b using (level, season, measure, tier)
+            where r.level = '{level}' and {where}""",
+        params,
+    )
+
+
+def zone_profile(con, counts_table: str, prefix: str, where: str, params: list) -> pd.DataFrame:
+    """Per-zone FGA share and FG% of a unit vs league (``prefix`` 'a_' own, 'o_' allowed)."""
+    zones = {"RA": "ra", "PAINT": "pnt", "MID": "mid", "C3": "c3", "ATB3": "atb3"}
+    parts = " union all ".join(
+        f"select '{z}' as zone, sum({prefix}fga_{k}) as fga, sum({prefix}fgm_{k}) as fgm "
+        f"from {counts_table} c where {where}"
+        for z, k in zones.items()
+    )
+    df = q(con, parts, params * len(zones))
+    if df.fga.sum() == 0:
+        return df
+    season = params[0]
+    lg = q(con, "select zone, share, fg_pct, xpts from metrics.zone_baselines where season = ?",
+           [season])  # fmt: skip
+    df = df.merge(lg, on="zone", how="left")
+    df["unit_share"] = df.fga / df.fga.sum()
+    df["unit_fg_pct"] = df.fgm / df.fga.where(df.fga > 0)
+    df["share_diff"] = df.unit_share - df.share
+    df["fg_pct_diff"] = df.unit_fg_pct - df.fg_pct
+    value = df.zone.map({"RA": 2, "PAINT": 2, "MID": 2, "C3": 3, "ATB3": 3})
+    # points above league average from this zone, per 100 of the unit's shots
+    df["making_pp100"] = 100 * (value * df.fgm - df.xpts * df.fga) / df.fga.sum()
+    return df
