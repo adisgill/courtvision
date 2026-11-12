@@ -341,6 +341,8 @@ def integrity_checks(con: duckdb.DuckDBPyConnection) -> list[tuple[str, str, str
          "select count(*) - count(distinct (gameId, actionNumber)) from kaggle.play_by_play"),
         ("Duplicate `players.personId`",
          "select count(*) - count(distinct personId) from kaggle.players"),
+        ("team_statistics placeholder rows with teamId = 0 (dropped in stg)",
+         "select count(*) from kaggle.team_statistics where teamId = 0"),
         ("Games without exactly 2 team_statistics rows",
          "select count(*) from (select g.gameId, count(t.teamId) n from kaggle.games g "
          "left join kaggle.team_statistics t using (gameId) group by 1) where n <> 2"),
