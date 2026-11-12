@@ -47,7 +47,7 @@ def test_prior_carries_last_season_forward():
     df1, true = synthetic(1)
     df2, _ = synthetic(2, n_games=40, true=true)  # a short second season
     seasons = {1: Season(df1), 2: Season(df2)}
-    fits, _ = _sequential(seasons, 400.0, (0.0, 0.0))
+    fits, _ = _sequential(seasons, 400.0, 1.0, {}, (0.0, 0.0))
     s2 = seasons[2]
     beta = fits[2][0]
     only = s2.solve(400.0, np.zeros(s2.p))
@@ -75,3 +75,16 @@ def test_schedule_effect_removes_opponent_strength():
     truth = pd.Series(a) - np.mean(list(a.values()))
     assert np.corrcoef(adj - adj.mean(), truth.loc[adj.index])[0, 1] > 0.97
     assert np.corrcoef(raw - raw.mean(), truth.loc[raw.index])[0, 1] < 0.99
+
+
+def test_box_prior_helps_a_short_season():
+    # A short season with an informative box prior beats the same season with prior 0.
+    df, true = synthetic(4, n_games=30)
+    s = Season(df)
+    box = {int(p): (true[int(p)][0] + 1.0, true[int(p)][1] - 1.0, 0.8) for p in s.players}
+    with_box = s.solve(400.0, s.prior({}, box, (0.0, 0.0), alpha=0.0))
+    without = s.solve(400.0, np.zeros(s.p))
+    t = np.array([true[int(p)][0] for p in s.players])
+    err_box = np.mean((with_box[0:-1:2] - t) ** 2)
+    err_none = np.mean((without[0:-1:2] - t) ** 2)
+    assert err_box < err_none

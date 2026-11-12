@@ -1,8 +1,9 @@
 # Metrics spec
 
-**Status: v1.1.** v1.0 approved 2026-11-12 with every recommended decision
+**Status: v1.2.** v1.0 approved 2026-11-12 with every recommended decision
 (D1–D9); v1.1 (free throws, fouls valuation, role, per-possession impact, opponent
-adjustment, market model) approved the same day, see [section 11](#11-v11-2026-11-12).
+adjustment, market model) approved the same day, see [section 11](#11-v11-2026-11-12);
+v1.2 (box-score prior for impact) also the same day, see [section 12](#12-v12-2026-11-12).
 Implemented in `src/courtvision/metrics/` and `src/courtvision/market.py`;
 `uv run courtvision build` reproduces every number. Section 10 records what
 implementation added or settled beyond the draft; section 8 has the
@@ -14,7 +15,8 @@ Contents: [0 Decisions](#0-decisions) ·
 [4 Shrinkage](#4-small-sample-shrinkage) · [5 Dimensions](#5-the-six-dimensions) ·
 [6 Availability](#6-availability-by-era) · [7 Outputs & CLI](#7-outputs-and-the-cli) ·
 [8 Acceptance tests](#8-acceptance-tests) · [9 Out of scope](#9-out-of-scope-for-v1) ·
-[10 Implementation notes](#10-implementation-notes-v10) · [11 v1.1](#11-v11-2026-11-12)
+[10 Implementation notes](#10-implementation-notes-v10) · [11 v1.1](#11-v11-2026-11-12) ·
+[12 v1.2](#12-v12-2026-11-12)
 
 ---
 
@@ -719,3 +721,42 @@ played for whom that season to break ties. `courtvision market build` writes
 The market is a planning aid built on public data, not a cap sheet: snapshot
 salaries miss later signings, contract years beyond the current season are not in
 the data, and the trade rules are simplified.
+
+## 12. v1.2 (2026-11-12)
+
+Approved by the user on 2026-11-12 ("yes, make it seamless") after v1.1's market
+showed that pricing on plus-minus alone undervalues some high-usage scorers.
+
+### 12.1 Box-score prior for impact
+
+v1.1's prior was last season's estimate only. v1.2 adds what this season's box score
+says. A **box model** (`metrics.impact_box_model`) regresses season-only offense and
+defense on per-100-possession box rates relative to league (points, FGA, 3PA, FTA,
+AST, TOV, OREB on offense; DREB, STL, BLK, PF on defense), true shooting and usage
+relative to league, their product, and the frontcourt position weight. Weighted by
+√possessions; player-seasons with ≥ 500 possessions, 1996-97 on, games with rebuilt
+lineups only. Its predictions are `box_off`, `box_def`, `box` in `player_impact`.
+
+Each player's prior for season *s* (per side):
+
+* returning player: `last + (1 − α) · r · (box_s − last)`
+* new to the league: `newcomer + r · (box_s − newcomer)`
+
+with reliability `r = poss_s / (poss_s + 1500)`, so the box part counts for little a
+few games into a season. `α` and `λ` are chosen jointly by 5-fold cross-validation over
+games on the same five seasons (`metrics.impact_cv`). α = 1 is the v1.1 model.
+
+**Result** ([`validation.md`](validation.md) section 7): CV picks α = 0.25 (mostly
+the box model, a quarter last season) and λ = 5,000; held-out error 3,820.9 vs 3,823.0
+at α = 1. Out of sample, last season's impact weighted by this season's minutes now
+predicts this season's team net rating at r = 0.77 (r² 0.60), up from 0.71 (0.50).
+The box model alone reaches 0.68 and raw on/off 0.38.
+
+**Speed.** Each season's normal equations (and each CV fold's) are eigendecomposed
+once, so every (λ, α) candidate costs two matrix-vector products per season; the
+whole impact stage, including the 30-candidate search, runs in about two minutes.
+The home-court term is now penalized like the player terms; with ~250k possessions
+behind it the shrinkage is under 2%.
+
+The market (11.6) needs no change: it reads `player_impact`, so prices, risk and
+options update with every build.

@@ -261,7 +261,7 @@ def write_build_info(con: duckdb.DuckDBPyConnection, kaggle_raw: Path, starts: d
         "git_dirty": dirty,
         "kaggle_downloaded_at_utc": kaggle.get("downloaded_at_utc"),
         "kaggle_version": kaggle.get("requested_version"),
-        "spec": "docs/metrics_spec.md v1.1",
+        "spec": "docs/metrics_spec.md v1.2",
         "tier_starts": json.dumps(starts),
     }
     cols = ", ".join(f"? as {k}" for k in info)

@@ -21,7 +21,7 @@ replacement from per-possession impact, in dollars), reads each team's payroll
 against the cap, tax and aprons, finds where each team is short, and lists the
 players who would fix it, with what they cost and how risky they are.
 
-> Status: **v1.1** for every season from 1974-75 (box-score tiers) and 1996-97
+> Status: **v1.2** for every season from 1974-75 (box-score tiers) and 1996-97
 > (play-by-play), with a validation report, a visualizer, a live mode and the market.
 >
 > * [`docs/metrics_spec.md`](docs/metrics_spec.md): formulas, scaling, roll-ups, tiers, acceptance tests
@@ -58,7 +58,7 @@ uv run courtvision metrics build                  # every rating, all seasons (~
 uv run courtvision ingest salaries                # salaries + cap thresholds (seconds)
 uv run courtvision market build                   # value, budgets, needs, options
 uv run courtvision validate                       # regenerate docs/validation.md
-uv run courtvision app                            # team / game / player / market / live
+uv run courtvision app                            # league / team / game / player / market / live
 uv run courtvision live                           # today's games; --game-id X rates one
 ```
 
@@ -95,7 +95,7 @@ over it and rebuilds in seconds. Raw downloads and every nba_api response
 src/courtvision/   library + CLI (`courtvision ...`)
   ingest/          Kaggle download/load, nba_api client + pull, staging views
   metrics/         play-by-play parser (possessions, lineups), counts, measures, ratings
-  app/             Streamlit visualizer
+  app/             Streamlit visualizer: league, team, game, player, market, live (click-through charts)
   live.py          live-game ratings from the NBA live feed
   market.py        player value, team budgets and needs, options and risk
   validation.py    generates docs/validation.md

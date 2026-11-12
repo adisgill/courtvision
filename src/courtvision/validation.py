@@ -351,10 +351,11 @@ def impact_check(con) -> pd.DataFrame:
             from metrics.presence_season where season_type = 'regular' group by all
         ),
         newc as (select newcomer_off + newcomer_def as v
-                 from metrics.impact_lambda where mode = 'prior_informed')
+                 from metrics.impact_lambda where mode = 'headline')
         select s.season, s.team_id, any_value(t.net) as net,
                sum(s.poss / t.poss * coalesce(i.impact, (select v from newc)))
                    as from_impact,
+               sum(s.poss / t.poss * coalesce(i.box, (select v from newc))) as from_box,
                sum(s.poss / t.poss * coalesce(i.season_only, 0)) as from_season_only,
                sum(s.poss / t.poss * coalesce(o.v, 0)) as from_on_off
         from share s
@@ -366,7 +367,8 @@ def impact_check(con) -> pd.DataFrame:
         group by s.season, s.team_id
     """).df()
     rows = []
-    for col, label in (("from_impact", "impact (prior-informed adjusted plus-minus)"),
+    for col, label in (("from_impact", "impact (adjusted plus-minus, box + last-season prior)"),
+                       ("from_box", "box model alone"),
                        ("from_season_only", "season-only adjusted plus-minus"),
                        ("from_on_off", "raw on/off (old Presence)")):  # fmt: skip
         r = df[col].corr(df.net)
@@ -400,6 +402,11 @@ def report(con) -> str:
     nba = nba_agreement(con)
     imp = impact_check(con)
     lam = con.sql("select * from metrics.impact_lambda").df()
+    by_alpha = con.sql(
+        """select alpha, arg_min("lambda", cv_mse) as best_lambda, min(cv_mse) as cv_mse
+           from metrics.impact_cv where mode = 'headline' group by alpha order by alpha"""
+    ).df()
+    box = con.sql("select * from metrics.impact_box_model").df()
     head = [c for c in pers.measure if c in (*M.HEADLINE, *COMPONENTS, "net_rtg", *FOUR_FACTORS)]
     parts = [
         "# Validation",
@@ -479,9 +486,23 @@ def report(con) -> str:
         "",
         "## 7. Per-possession impact (adjusted plus-minus)",
         "",
-        "Ridge strength chosen by 5-fold cross-validation over games (`metrics.impact_cv`):",
+        "Ridge strength `lambda` and prior blend `alpha` (weight on last season's estimate; "
+        "1 - alpha on this season's box model) chosen by 5-fold cross-validation over games "
+        "(`metrics.impact_cv`):",
         "",
-        _md_table(lam, ".1f"),
+        _md_table(lam, ".2f"),
+        "",
+        "Held-out error at each blend (best `lambda` for each). `alpha` = 1 is the v1.1 "
+        "model, with no box-score prior:",
+        "",
+        _md_table(by_alpha, ".2f"),
+        "",
+        f"Box model (`metrics.impact_box_model`): R² against season-only estimates "
+        f"{box.r2_off.iloc[0]:.2f} (offense), {box.r2_def.iloc[0]:.2f} (defense). Features "
+        "are per 100 possessions relative to league; usage and true shooting relative to "
+        "league; position.",
+        "",
+        _md_table(box[["feature", "coef_off", "coef_def"]]),
         "",
         "Out of sample: last season's player numbers, weighted by this season's possession "
         f"shares, against this season's team net rating ({imp.attrs['team_seasons']} "
