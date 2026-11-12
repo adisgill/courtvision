@@ -1,0 +1,33 @@
+# --- data: never committed (re-create with `courtvision ingest ...`) ---
+data/
+*.duckdb
+*.duckdb.wal
+*.parquet
+
+# --- credentials ---
+.env
+.env.*
+!.env.example
+kaggle.json
+access_token
+*.pem
+*.key
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- notebooks / editors / OS ---
+.ipynb_checkpoints/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
