@@ -67,3 +67,7 @@ app:
 # rate a live game, e.g. `just live 0022600216`; no id lists today's games
 live game_id="":
     uv run courtvision live {{ if game_id == "" { "" } else { "--game-id " + game_id } }}
+
+# predict each team's next game
+forecast:
+    uv run courtvision forecast

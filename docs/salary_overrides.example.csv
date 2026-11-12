@@ -1,0 +1,9 @@
+# Copy to data/salary_overrides.csv and edit. Each row replaces (or adds) one player's
+# salary for one season; add one row per season to give a contract its length.
+# season = start year (2026 = 2026-27). team: abbreviation (LAL) or full name; blank =
+# the team he plays for now. option: player / team / blank.
+# Then run: uv run courtvision ingest salaries --no-download && uv run courtvision market build
+player,season,salary,team,option
+Example Player,2026,20000000,LAL,
+Example Player,2027,21000000,LAL,
+Example Player,2028,22000000,LAL,player

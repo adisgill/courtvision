@@ -158,16 +158,38 @@ def metrics_build(
 def ingest_salaries(
     download: bool = typer.Option(True, help="Download from Kaggle first (else use the cache)."),
 ) -> None:
-    """Salaries, payrolls, cap / tax / aprons (Kaggle: mrbridge) -> salary.* with NBA ids."""
-    from courtvision.db import connect
-    from courtvision.ingest import salaries
+    """Salaries, contracts, cap / tax / aprons -> salary.* (book, contract_summary, ...).
 
-    raw = get_paths().data / "raw" / "salaries" / "mrbridge"
+    Sources: the July 2026 salary snapshot (Kaggle mrbridge), Basketball-Reference
+    contracts with future years and options (Kaggle deocheng, June 2026), and your own
+    ``data/salary_overrides.csv`` if it exists (player,season,salary,team,option).
+    """
+    from courtvision.db import connect
+    from courtvision.ingest import contracts, salaries
+
+    data = get_paths().data
+    raw = data / "raw" / "salaries" / "mrbridge"
+    bb_dir = data / "raw" / "salaries" / "deocheng"
     if download or not raw.exists():
         salaries.download(raw)
+    bb_path = next(iter(bb_dir.rglob("public.player_contracts.csv")), None)
+    if download or bb_path is None:
+        bb_path = contracts.download_bbref(bb_dir)
     with connect() as con:
         stats = salaries.load(con, raw)["by_season"]
+        season = con.execute("select max(season) from salary.contracts").fetchall()[0][0]
+        bb = contracts.load_bbref(con, bb_path)
+        over = contracts.read_overrides(data / "salary_overrides.csv", con)
+        res = contracts.build_book(con, bb, season, over)
+        summary = contracts.summarize(con, res["book"], res["declined"], season)
+        contracts.write(con, res["book"], summary)
+        status = con.execute(
+            "select status, count(*) n from salary.contract_summary group by 1 order by 2 desc"
+        ).df()
     typer.echo(stats.to_string(index=False))
+    typer.echo(f"\nBasketball-Reference contracts matched: {bb.person_id.notna().mean():.1%}; "
+               f"overrides: {len(over)}")  # fmt: skip
+    typer.echo(status.to_string(index=False))
 
 
 market_app = typer.Typer(help="Player market: value, budgets, needs, options.",
@@ -190,6 +212,23 @@ def market_build(
         params = market.build(con, season)
     for k, v in params.items():
         typer.echo(f"{k:>22}: {v:,.4g}" if isinstance(v, float) else f"{k:>22}: {v}")
+
+
+@app.command("forecast")
+def forecast_cmd() -> None:
+    """Predict each team's next game (team and player level) and backtest the method."""
+    import logging
+
+    from courtvision import forecast
+    from courtvision.db import connect
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    with connect() as con:
+        res = forecast.build(con)
+        bt = con.execute("select * from forecast.backtest_games").df()
+    typer.echo(f"{res['games']} upcoming games predicted; blend (team form) {res['blend']:.2f}, "
+               f"margin sigma {res['sigma']:.1f}")  # fmt: skip
+    typer.echo(bt.round(3).to_string(index=False))
 
 
 @app.command("app")
@@ -275,6 +314,7 @@ def build(
         market_build(season=None)
     else:
         typer.echo("no salary cache: run `courtvision ingest salaries` for the market model")
+    forecast_cmd()
 
 
 def _cached_nba_api_seasons(cache_dir) -> list[int]:

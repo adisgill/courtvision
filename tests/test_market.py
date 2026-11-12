@@ -93,3 +93,65 @@ def test_selected_point_reads_every_customdata_shape():
     assert selected(ev("x")) == "x"
     assert selected(SimpleNamespace(selection={"points": []})) is None
     assert selected(None) is None
+
+
+def test_max_share_by_service():
+    from courtvision.market import max_share
+
+    assert list(max_share([0, 4, 6, 7, 9, 10, 15])) == [0.25, 0.25, 0.25, 0.30, 0.30, 0.35, 0.35]
+
+
+def test_rank_pricing_maps_value_quantiles_to_salary_quantiles():
+    import numpy as np
+
+    from courtvision.market import fair_share, market_curve
+
+    rng = np.random.default_rng(0)
+    value = rng.normal(100, 50, 400)
+    share = np.sort(rng.uniform(0.02, 0.35, 400))  # salaries unrelated in order
+    curve = market_curve(value, share)
+    assert np.isclose(fair_share(value.max(), curve), share.max())  # best player: top salary
+    assert np.isclose(fair_share(value.min(), curve), share.min())
+    assert np.isclose(fair_share(np.median(value), curve), np.median(share), atol=0.01)
+    xs = np.linspace(-50, 250, 50)
+    assert np.all(np.diff(fair_share(xs, curve)) >= 0)  # never decreasing
+
+
+def test_pava_is_monotone_and_preserves_the_mean():
+    import numpy as np
+
+    from courtvision.market import pava
+
+    y = np.array([1.0, 3.0, 2.0, 2.0, 5.0, 4.0])
+    fit = pava(y, np.ones(len(y)))
+    assert np.all(np.diff(fit) >= 0) and np.isclose(fit.mean(), y.mean())
+
+
+def test_mojibake_repair():
+    from courtvision.ingest.contracts import fix_mojibake
+
+    assert fix_mojibake("Luka DonÄ\x8diÄ\x87") == "Luka Dončić"
+    assert fix_mojibake("Plain Name") == "Plain Name"
+    assert fix_mojibake(None) is None
+
+
+def test_team_form_model_recovers_strength_and_opponent_effect():
+    import numpy as np
+
+    from courtvision.forecast import fit_team_model, predict_team
+
+    rng = np.random.default_rng(1)
+    form = {t: rng.normal(0, 3) for t in range(10)}
+    opp = {t: rng.normal(0, 3) for t in range(10)}
+    rows = []
+    for _ in range(800):
+        a, b = rng.choice(10, 2, replace=False)
+        home = bool(rng.integers(2))
+        rows.append({"team_id": a, "opp_id": b, "home": home,
+                     "value": 2 + form[a] + opp[b] + (1.5 if home else -1.5)
+                     + rng.normal(0, 2)})  # fmt: skip
+    g = pd.DataFrame(rows)
+    m = fit_team_model(g, np.ones(len(g)))
+    pred = predict_team(m, 0, 1, True)
+    truth = 2 + form[0] + opp[1] + 1.5
+    assert abs(pred - truth) < 1.0
