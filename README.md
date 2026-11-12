@@ -41,7 +41,7 @@ optional — every recipe is a one-line `uv run` command you can type yourself.
 uv sync
 cp .env.example .env                              # then put your Kaggle API token in it
 uv run courtvision ingest kaggle                  # download (~1.1 GB) + load (~1 min)
-uv run courtvision ingest nba-api --season 2025   # ~1.5 h cold, seconds once cached
+uv run courtvision ingest nba-api --season 2025   # ~1 h cold (2,732 requests), seconds once cached
 uv run courtvision audit kaggle                   # regenerate docs/audit/kaggle/*
 uv run courtvision audit nba-api --season 2025    # regenerate docs/audit/nba_api_2025.md
 ```

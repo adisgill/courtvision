@@ -37,9 +37,9 @@ Snapshot audited: Kaggle download of 2026-11-12 00:47 UTC (games through
 | Possessions, pace, ratings (precomputed) | 1996-97 | Kaggle `*Extended` | 100% of regular-season games |
 | **Play-by-play** | **1996-97** | Kaggle `PlayByPlay.parquet` | Two schemas; see below |
 | **Shot coordinates → court zones** | **1996-97** | Kaggle PBP | Before 2010-11 almost every rim attempt is logged at exactly (0, 0) |
-| Shot coordinates matching official shot charts | verified 2025-26 | nba_api `shotchartdetail` | 100% shot match, 99.9% identical x/y |
+| Shot coordinates matching official shot charts | verified 1996-97, 2005-06, 2025-26 | nba_api `shotchartdetail` | 100% shot match; 99.9–100% identical x/y |
 | Lineups / stints | 1996-97 (derived from PBP subs) | Kaggle PBP | Legacy schema names the incoming player only as a last name in text |
-| Exact stints | 2025-26 (pulled) | nba_api `gamerotation` | Matches box minutes 100% within 0.5 min |
+| Exact stints | 2025-26 (pulled) | nba_api `gamerotation` | 99.7% of player-games within 0.5 min of box minutes |
 | Player position (G/F/C) | all eras | Kaggle `Players.csv` | Career-level flags, not per season; ~10–35 multi-flag players per debut year |
 | Possession owner per event | 2019-20 | Kaggle PBP (live schema) | |
 | Official shot-zone labels | 2025-26 (pulled) | nba_api `shotchartdetail` | Used to validate our zone geometry |
@@ -241,9 +241,37 @@ returns exactly **102,400 rows**, 47% of the season. The pull therefore always
 goes team by team. Per-team totals: 219,160 regular-season FGA vs 219,159 in
 the box scores.
 
-Joins to Kaggle ([`audit/nba_api_2025.md`](audit/nba_api_2025.md)):
+Joins to Kaggle ([`audit/nba_api_2025.md`](audit/nba_api_2025.md)), all
+1,321 games of 2025-26 (1,230 regular, 6 play-in, 85 playoff):
 
-<!-- NBA_API_JOIN_SUMMARY -->
+| Check | Result |
+|---|---|
+| Game ids | 1,321 in both sources; 0 only in nba_api, 0 only in Kaggle |
+| Team ids | all 30 in `TeamHistories` |
+| Player ids in shots / rotations | 582 players, all in `Players.csv`; 100% of (game, player) pairs in `PlayerStatistics` |
+| Player ids in nba_api PBP | 396 ids are not players: 30 team ids (team rebounds/turnovers/timeouts), 30 on fouls/ejections (coaches), 336 small ids on instant-replay events only |
+| Shots, nba_api vs Kaggle `stg.shots` | 100% matched (on game, shooter, period, clock); 99.9% identical x/y, 100% within 1 ft; 100% same made/missed and 2/3 |
+| Rotation stints vs box minutes | 99.7% of 28,655 player-games within 0.5 min; mean abs diff 0.3 min |
+| Team box scores | PTS, FGA, OREB, STL identical in 100% of 2,642 team-games; TOV identical only once team turnovers are added (100%) |
+
+**Older seasons.** To check that Kaggle's legacy-schema coordinates and the
+zone geometry hold before the live feed, regular-season shot charts were also
+pulled for 1996-97 and 2005-06 (`--only shots`, 30 requests each):
+
+| Season | Shots (nba_api / Kaggle) | Kaggle shot = official shot (event id) | Identical x/y | Zone rule = official zone |
+|---|---|---:|---:|---:|
+| 1996-97 | 188,589 / 188,590 | 100.0% | 100.0% | 89.6%* |
+| 2005-06 | 194,314 / 194,314 | 100.0% | 100.0% | 99.94% |
+| 2025-26 | 219,160 / 219,158 (reg.) | 100.0% (clock match) | 99.9% | 99.99% |
+
+\* 1996-97 was the last season of the shortened 22 ft three-point line. The
+NBA's zone labels use today's 23.75 ft arc, so 19,165 shots between 22 and
+23.75 ft that **were** threes are labelled "Mid-Range". The zone rule follows
+the recorded shot value and calls them threes, which is right for that season.
+Every other disagreement is <0.3% of shots.
+
+So in the legacy schema, Kaggle's `xLegacy`/`yLegacy` **are** the official
+shot-chart coordinates, and they join on `actionNumber = GAME_EVENT_ID`.
 
 ## Reproduce
 
@@ -251,8 +279,10 @@ Joins to Kaggle ([`audit/nba_api_2025.md`](audit/nba_api_2025.md)):
 uv run courtvision ingest kaggle-download      # ~1.1 GB zip; writes data/raw/kaggle/_manifest.json
 uv run courtvision ingest kaggle-load          # Parquet + kaggle.* and stg.* views (~45 s)
 uv run courtvision audit kaggle                # docs/audit/kaggle/*.md (~3 min)
-uv run courtvision ingest nba-api --season 2025   # ~1.5 h on a cold cache; seconds when cached
+uv run courtvision ingest nba-api --season 2025   # ~1 h on a cold cache (2,732 requests); seconds when cached
 uv run courtvision audit nba-api --season 2025    # docs/audit/nba_api_2025.md
+uv run courtvision ingest nba-api --season 1996 --season-type regular --only shots   # older-season check
+uv run courtvision ingest nba-api --season 2005 --season-type regular --only shots
 ```
 
 The Kaggle dataset is republished nightly, so counts for the current season

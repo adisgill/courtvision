@@ -91,8 +91,12 @@ value; geometry splits within each class:
 These are the court lines (4 ft arc, 16 ft lane, free-throw line 13.75 ft
 from the rim, 22 ft corner three up to 14 ft from the baseline). The rule
 reproduces the NBA's official `SHOT_ZONE_BASIC` on **99.992%** of 337,073
-2025-26 shots; the 28 mismatches are shots whose official 2/3 flag contradicts
-their official zone. Left/right corners are kept for the heat map (x < 0 is
+2025-26 shots (the 28 mismatches are shots whose official 2/3 flag contradicts
+their official zone) and on 99.94% of 2005-06 shots. In **1996-97**, the last
+season of the 22 ft three-point line, threes from 22–23.75 ft fall in `ATB3`
+because the rule uses the recorded shot value. That's correct for the season,
+but it makes 1996-97 zone *shares* not comparable with later seasons. Ratings
+are unaffected because baselines are per season. Left/right corners are kept for the heat map (x < 0 is
 the left corner) but rated as one zone. *Perimeter* = {MID, C3, ATB3};
 *paint* = {RA, PAINT}.
 
@@ -435,7 +439,7 @@ Before any rating is trusted:
 
 | # | Test | Threshold | Status |
 |---|---|---|---|
-| T1 | Zone rule vs official `SHOT_ZONE_BASIC` | ≥ 99.9% | **99.992% on 2025-26.** To repeat on 1996-97 and 2005-06 (60 requests) to confirm older coordinates |
+| T1 | Zone rule vs official `SHOT_ZONE_BASIC` | ≥ 99.9% | **Pass.** 99.992% on 2025-26, 99.94% on 2005-06. 1996-97 is 89.6% because official zones use today's arc while 1994-95 to 1996-97 had a 22 ft line; the rule follows the recorded shot value, which is correct (see data audit) |
 | T2 | PBP-counted `POSS` vs Kaggle's official `possessions` (team-game, 1996-97+) | MAE ≤ 0.5 | to do. (Box formula already measured: MAE 2.5 with 0.44, 1.7 with 0.40, which is why tier A counts instead) |
 | T3 | Reconstructed stints vs `gamerotation` (2025-26) | ≥ 99% of player-games within 1 min; on-court five exact for ≥ 98% of events | to do |
 | T4 | Roll-up identities (§3) | exact to 1e-9 | unit tests |
