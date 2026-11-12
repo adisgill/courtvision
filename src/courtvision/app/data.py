@@ -213,3 +213,36 @@ def zone_profile(con, counts_table: str, prefix: str, where: str, params: list) 
     df["selection_pp100"] = 100 * df.share_diff * (df.xpts - lg_pps)
     df["making_pp100"] = 100 * (value * df.fgm - df.xpts * df.fga) / total
     return df
+
+
+def shots(con, seasons: list[int], season_type: str = "regular", team_id: int | None = None,
+          against: int | None = None, person_id: int | None = None) -> pd.DataFrame:  # fmt: skip
+    """Shot locations of one unit: a team's (``team_id``), its opponents' (``against``)
+    or a player's (``person_id``), over ``seasons``."""
+    where, params = [f"s.season in ({','.join('?' * len(seasons))})", "s.season_type = ?"], [
+        *seasons, season_type]  # fmt: skip
+    if team_id is not None:
+        where.append("s.team_id = ?")
+        params.append(team_id)
+    if against is not None:
+        where.append("s.team_id <> ? and (g.home_team_id = ? or g.away_team_id = ?)")
+        params += [against] * 3
+    if person_id is not None:
+        where.append("s.person_id = ?")
+        params.append(person_id)
+    return q(con, f"""select s.season, s.x_legacy::double as x, s.y_legacy::double as y,
+                             s.made::int as made, s.shot_value
+                      from stg.shots s join stg.games g using (game_id)
+                      where {' and '.join(where)}""", params)  # fmt: skip
+
+
+def league_shots(con, season: int, season_type: str = "regular") -> pd.DataFrame:
+    return q(con, """select x_legacy::double as x, y_legacy::double as y, made::int as made,
+                            shot_value
+                     from stg.shots where season = ? and season_type = ?""",
+             [season, season_type])  # fmt: skip
+
+
+def has_schema(con, schema: str) -> bool:
+    return bool(q(con, "select count(*) n from information_schema.tables "
+                  "where table_schema = ?", [schema]).n.iloc[0])  # fmt: skip

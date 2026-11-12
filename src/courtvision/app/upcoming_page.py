@@ -282,6 +282,10 @@ def render(con, team_label, short_team, players: pd.DataFrame, mode: str, goto) 
                     help="Home net rating edge per 100 from team form and from the roster's "
                     "per-possession impact over expected minutes.")  # fmt: skip
     _coaches_line(con, home, away, season, short_team)
+    from courtvision.app import scout
+
+    names = {home: short_team(home, season), away: short_team(away, season)}
+    scout.scouting_report(con, gid, home, away, season, names, players, mode, goto)
     _stat_lines(con, gid, home, away, season, short_team, players, mode)
 
     tm = D.q(con, "select * from forecast.team where game_id = ?", [gid])

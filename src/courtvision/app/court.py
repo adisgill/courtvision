@@ -222,6 +222,180 @@ def zone_court(prof: pd.DataFrame, mode: str = "light", allowed: bool = False) -
     return fig
 
 
+# ---- hexagon shot maps -------------------------------------------------------------------
+
+HEX_R = 17.0  # hexagon radius, tenths of a foot (~1.7 ft)
+K_ZONE, K_HEX = 150.0, 60.0  # shots of prior: zone toward league, hexagon toward its zone
+PP100_SCALE = 20.0  # points per 100 shots vs league at full color
+FULL_SHARE = 0.016  # a hexagon with this share of the shots is drawn full size
+_SQ3 = math.sqrt(3)
+
+
+def hex_of(x: np.ndarray, y: np.ndarray, r: float = HEX_R) -> tuple[np.ndarray, np.ndarray]:
+    """Axial coordinates (q, r) of the pointy-top hexagon containing each point."""
+    q = (_SQ3 / 3 * x - y / 3) / r
+    rr = (2 / 3 * y) / r
+    cx, cz = q, rr
+    cy = -cx - cz
+    rx, ry, rz = np.round(cx), np.round(cy), np.round(cz)
+    dx, dy, dz = np.abs(rx - cx), np.abs(ry - cy), np.abs(rz - cz)
+    fix_x = (dx > dy) & (dx > dz)
+    fix_z = ~fix_x & (dz >= dy)
+    rx = np.where(fix_x, -ry - rz, rx)
+    rz = np.where(fix_z, -rx - ry, rz)
+    return rx.astype(int), rz.astype(int)
+
+
+def hex_center(q, rr, r: float = HEX_R):
+    return r * _SQ3 * (q + np.asarray(rr) / 2), r * 1.5 * np.asarray(rr)
+
+
+def _zone_arr(v: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    d = np.hypot(x, y)
+    return np.select(
+        [(v == 3) & (np.abs(x) >= 220) & (y <= 87), v == 3, d < 40, (np.abs(x) <= 80) & (y <= 138)],
+        ["C3", "ATB3", "RA", "PAINT"], "MID")  # fmt: skip
+
+
+def league_hex(shots: pd.DataFrame) -> pd.DataFrame:
+    """League baseline per hexagon from all of a season's shots (x, y, made, shot_value):
+    attempts, FG%, points per shot, and the zone most of its shots belong to."""
+    s = shots.dropna(subset=["x", "y"])
+    s = s[(s.y <= 330) & (s.y >= -50)]
+    q, rr = hex_of(s.x.to_numpy(float), s.y.to_numpy(float))
+    d = pd.DataFrame({"q": q, "rr": rr, "made": s.made.astype(float).to_numpy(),
+                      "pts": (s.made.astype(float) * s.shot_value).to_numpy(),
+                      "zone": _zone_arr(s.shot_value.to_numpy(), s.x.to_numpy(float),
+                                        s.y.to_numpy(float))})  # fmt: skip
+    g = (
+        d.groupby(["q", "rr"])
+        .agg(
+            lg_n=("made", "size"),
+            lg_fg=("made", "mean"),
+            lg_pps=("pts", "mean"),
+            zone=("zone", lambda z: z.mode().iloc[0]),
+        )
+        .reset_index()
+    )
+    return g
+
+
+def unit_hex(shots: pd.DataFrame, league: dict[int, pd.DataFrame]) -> pd.DataFrame:
+    """One unit's shots (season, x, y, made, shot_value, optional weight w) against the
+    league from the same spots. Per hexagon: weighted attempts, share, FG%, and points
+    per 100 shots vs league (``diff``), shrunk toward the unit's zone and the zone toward
+    league average, so a hexagon with three shots doesn't paint itself dark."""
+    s = shots.dropna(subset=["x", "y"]).copy()
+    s = s[(s.y <= 330) & (s.y >= -50)]
+    if s.empty:
+        return pd.DataFrame()
+    s["w"] = s.get("w", 1.0)
+    s["q"], s["rr"] = hex_of(s.x.to_numpy(float), s.y.to_numpy(float))
+    base = pd.concat([lg.assign(season=se) for se, lg in league.items()])
+    s = s.merge(base, on=["season", "q", "rr"], how="left")
+    s["lg_pps"] = s.lg_pps.fillna(s.made.mean() * s.shot_value)
+    s["lg_fg"] = s.lg_fg.fillna(s.made.mean())
+    s["zone"] = s.zone.fillna(pd.Series(_zone_arr(s.shot_value.to_numpy(), s.x.to_numpy(float),
+                                                  s.y.to_numpy(float)), index=s.index))  # fmt: skip
+    s["pts"] = s.made.astype(float) * s.shot_value
+    s["ex"] = s.w * (s.pts - s.lg_pps)
+    s["wm"], s["wl"] = s.w * s.made.astype(float), s.w * s.lg_fg
+    z = s.groupby("zone").agg(zn=("w", "sum"), zex=("ex", "sum"))
+    zdiff = z.zex / (z.zn + K_ZONE)
+    h = s.groupby(["q", "rr"]).agg(n=("w", "sum"), ex=("ex", "sum"), made=("wm", "sum"),
+                                   lgm=("wl", "sum"), zone=("zone", lambda v: v.mode().iloc[0])
+                                   ).reset_index()  # fmt: skip
+    h["zone_diff"] = h.zone.map(zdiff).fillna(0.0)
+    h["diff"] = 100 * (h.ex + K_HEX * h.zone_diff) / (h.n + K_HEX)
+    h["share"] = h.n / h.n.sum()
+    h["fg"] = h.made / h.n
+    h["lg_fg"] = h.lgm / h.n
+    h["cx"], h["cy"] = hex_center(h.q.to_numpy(), h.rr.to_numpy())
+    return h
+
+
+def _hex_poly(cx: float, cy: float, scale: float) -> list[tuple[float, float]]:
+    r = HEX_R * scale
+    return [(cx + r * math.cos(math.radians(a)), cy + r * math.sin(math.radians(a)))
+            for a in (30, 90, 150, 210, 270, 330, 30)]  # fmt: skip
+
+
+def hex_court(h: pd.DataFrame, mode: str = "light", value: str = "diff", size: str = "share",
+              hover: list[str] | None = None, min_share: float = 0.0015,
+              scale: float = PP100_SCALE) -> go.Figure:  # fmt: skip
+    """Hexagon shot map: each hexagon's area follows ``size`` (share of shots), its color
+    ``value`` (points per 100 shots vs league from the same spots; blue good for the unit,
+    red bad, gray average). ``hover``: one text line per hexagon."""
+    t = THEME[mode]
+    fig = go.Figure()
+    h = h[(h[size] >= min_share) & (h.cy <= Y_TOP - 8)].copy() if not h.empty else h
+    if not h.empty:
+        h["k"] = np.clip(np.sqrt(h[size] / FULL_SHARE), 0.32, 1.0) * 0.96
+        steps = np.linspace(-1, 1, 11)
+        h["bin"] = np.digitize(np.clip(h[value] / scale, -1, 1), (steps[:-1] + steps[1:]) / 2)
+        for b, g in h.groupby("bin"):
+            s = steps[int(b)]
+            fill = _mix(t["mid"], t["good"] if s >= 0 else t["bad"], abs(s))
+            xs: list[float | None] = []
+            ys: list[float | None] = []
+            for r in g.itertuples():
+                poly = _hex_poly(r.cx, r.cy, r.k)
+                xs += [p[0] for p in poly] + [None]
+                ys += [p[1] for p in poly] + [None]
+            fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", fill="toself", fillcolor=fill,
+                                     line={"width": 0.6, "color": fill}, hoverinfo="skip",
+                                     showlegend=False))  # fmt: skip
+        fig.add_trace(go.Scatter(
+            x=h.cx, y=h.cy, mode="markers", showlegend=False,
+            marker={"size": 16, "color": "rgba(0,0,0,0)"},
+            text=hover if hover is not None else [
+                f"{r.share:.1%} of shots · FG {r.fg:.0%} (league {r.lg_fg:.0%})<br>"
+                f"{r.diff:+.1f} points per 100 shots vs league" for r in h.itertuples()],
+            hovertemplate="%{text}<extra></extra>",
+        ))  # fmt: skip
+    fig.update_layout(
+        shapes=court_lines(t["lines"]),
+        xaxis={"visible": False, "range": [X_MIN - 5, X_MAX + 5], "fixedrange": True},
+        yaxis={"visible": False, "range": [Y_MIN - 8, Y_TOP + 8], "fixedrange": True,
+               "scaleanchor": "x"},
+        margin={"l": 0, "r": 0, "t": 6, "b": 0}, height=430,
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        hoverlabel={"bgcolor": t["mid"], "font": {"color": t["ink"]}},
+    )  # fmt: skip
+    return fig
+
+
+def hex_key(mode: str = "light", scale: float = PP100_SCALE, unit: str = "") -> go.Figure:
+    """A slim legend for the hexagon maps: color steps and two sizes."""
+    t = THEME[mode]
+    fig = go.Figure()
+    steps = np.linspace(-1, 1, 11)
+    for i, s in enumerate(steps):
+        fill = _mix(t["mid"], t["good"] if s >= 0 else t["bad"], abs(s))
+        poly = _hex_poly(i * 34.0, 0, 0.96)
+        fig.add_trace(go.Scatter(x=[p[0] for p in poly], y=[p[1] for p in poly], fill="toself",
+                                 fillcolor=fill, mode="lines", line={"width": 0},
+                                 hoverinfo="skip", showlegend=False))  # fmt: skip
+    for x, txt, anchor in ((-20, f"−{scale:.0f}", "right"), (360, f"+{scale:.0f}", "left")):
+        fig.add_annotation(x=x, y=0, text=txt, showarrow=False, xanchor=anchor,
+                           font={"size": 11, "color": t["ink2"]})  # fmt: skip
+    fig.add_annotation(x=170, y=-24, text=unit, showarrow=False, yanchor="top",
+                       font={"size": 11, "color": t["muted"]})  # fmt: skip
+    for x, k, txt in ((470, 0.4, "rare"), (530, 1.0, "frequent")):
+        poly = _hex_poly(x, 0, k)
+        fig.add_trace(go.Scatter(x=[p[0] for p in poly], y=[p[1] for p in poly], fill="toself",
+                                 fillcolor=t["bar"], mode="lines", line={"width": 0},
+                                 hoverinfo="skip", showlegend=False))  # fmt: skip
+        fig.add_annotation(x=x, y=-24, text=txt, showarrow=False, yanchor="top",
+                           font={"size": 11, "color": t["muted"]})  # fmt: skip
+    fig.update_layout(xaxis={"visible": False, "range": [-80, 580], "fixedrange": True},
+                      yaxis={"visible": False, "range": [-48, 22], "fixedrange": True,
+                             "scaleanchor": "x"},
+                      height=70, margin={"l": 0, "r": 0, "t": 0, "b": 0},
+                      plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")  # fmt: skip
+    return fig
+
+
 def shot_mix(prof: pd.DataFrame, who: str, mode: str = "light") -> go.Figure:
     """Share of the unit's shots by zone (bars) against league average (tick)."""
     t = THEME[mode]

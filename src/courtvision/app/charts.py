@@ -50,8 +50,32 @@ def good_bad(value: float | None, scale: float, mode: str) -> str:
 
 
 def scale(mode: str) -> list[list]:
+    """Diverging scale: red - gray - blue, with intermediate steps so mid values stay
+    readable (the gray band is wide enough that 'about average' looks it)."""
     t = THEME[mode]
-    return [[0, t["bad"]], [0.5, t["mid"]], [1, t["good"]]]
+    return [[0, t["bad"]], [0.2, mix(t["mid"], t["bad"], 0.65)], [0.42, t["mid"]],
+            [0.58, t["mid"]], [0.8, mix(t["mid"], t["good"], 0.65)], [1, t["good"]]]  # fmt: skip
+
+
+def heat_grid(z: pd.DataFrame, text: pd.DataFrame, mode: str, hover: pd.DataFrame | None = None,
+              height: int | None = None, row_px: int = 30) -> go.Figure:  # fmt: skip
+    """Rows x columns grid colored by ``z`` (already scaled to -1..1: blue good, red bad,
+    NaN gray), printing ``text``; columns can carry different units because each is
+    scaled on its own before it gets here."""
+    t = THEME[mode]
+    zz = z.to_numpy(float)
+    fig = go.Figure(go.Heatmap(
+        z=np.nan_to_num(zz, nan=0.0), x=list(z.columns), y=list(z.index),
+        text=text.to_numpy(), texttemplate="%{text}", textfont={"size": 12},
+        customdata=(hover if hover is not None else text).to_numpy(),
+        colorscale=scale(mode), zmin=-1, zmax=1, zmid=0, xgap=3, ygap=3, showscale=False,
+        hovertemplate="%{y} · %{x}<br>%{customdata}<extra></extra>",
+    ))  # fmt: skip
+    base_layout(fig, height or row_px * len(z) + 70,
+                xaxis={"side": "top", "fixedrange": True, "tickfont": {"color": t["ink2"]}},
+                yaxis={"autorange": "reversed", "fixedrange": True,
+                       "tickfont": {"color": t["ink"]}})  # fmt: skip
+    return fig
 
 
 def base_layout(fig: go.Figure, height: int, **kw) -> go.Figure:
@@ -96,15 +120,18 @@ def rating_heatmap(df: pd.DataFrame, rows: str, cols: list[str], col_labels: lis
                    mode: str, height: int | None = None) -> go.Figure:  # fmt: skip
     """Rows x dimensions grid of 0-100 ratings, diverging around 50, values printed."""
     z = df[cols].to_numpy(dtype=float)
-    text = [["" if np.isnan(v) else f"{v:.0f}" for v in row] for row in z]
+    text = [["–" if np.isnan(v) else f"{v:.0f}" for v in row] for row in z]
+    t = THEME[mode]
     fig = go.Figure(go.Heatmap(
-        z=z, x=col_labels, y=df[rows].tolist(), text=text, texttemplate="%{text}",
-        colorscale=scale(mode), zmin=20, zmax=80, zmid=50, xgap=2, ygap=2,
-        showscale=False, hovertemplate="%{y} · %{x}: %{z:.0f}<extra></extra>",
+        z=np.where(np.isnan(z), 50, z), x=col_labels, y=df[rows].tolist(), text=text,
+        texttemplate="%{text}", textfont={"size": 12}, colorscale=scale(mode), zmin=20,
+        zmax=80, zmid=50, xgap=3, ygap=3, showscale=False,
+        hovertemplate="%{y} · %{x}: %{text} (50 = league average)<extra></extra>",
     ))  # fmt: skip
-    base_layout(fig, height or 26 * len(df) + 60,
-                xaxis={"side": "top", "fixedrange": True},
-                yaxis={"autorange": "reversed", "fixedrange": True})  # fmt: skip
+    base_layout(fig, height or 30 * len(df) + 60,
+                xaxis={"side": "top", "fixedrange": True, "tickfont": {"color": t["ink2"]}},
+                yaxis={"autorange": "reversed", "fixedrange": True,
+                       "tickfont": {"color": t["ink"]}})  # fmt: skip
     return fig
 
 

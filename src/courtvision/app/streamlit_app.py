@@ -1,6 +1,6 @@
 """courtvision visualizer: ``uv run courtvision app``.
 
-League, upcoming, team, game, player, coaches, market and live views. Every chart is
+League, upcoming, team, game, player, plays, coaches, market and live views. Every chart is
 interactive: hover for numbers, and click a team or a player to open its page. Read-only
 over ``data/courtvision.duckdb``; run ``courtvision build`` first.
 """
@@ -131,8 +131,34 @@ def dimension_charts(r: pd.DataFrame, mode: str, key: str, adj: pd.DataFrame | N
         st.dataframe(rating_table(r, D.ordered(r.measure)), hide_index=True)
 
 
-def zone_charts(prof: pd.DataFrame, who: str, allowed: bool = False, key: str = "") -> None:
-    """Court (how well, by zone) beside bars (how often, by zone), plus the table."""
+@st.cache_data(show_spinner=False)
+def _league_hex(season: int, season_type: str) -> pd.DataFrame:
+    return court.league_hex(D.league_shots(_con(), season, season_type))
+
+
+def shot_map(shots: pd.DataFrame, season: int, stype: str, mode: str, allowed: bool,
+             key: str) -> None:  # fmt: skip
+    """Hexagon map of one unit's shots: size = how often, color = points per shot vs league
+    from the same spots (for a defense, what opponents scored; blue = good defense)."""
+    h = court.unit_hex(shots, {season: _league_hex(season, stype)})
+    if h.empty:
+        st.info("No shot locations for this selection.")
+        return
+    if allowed:
+        h["diff"] = -h["diff"]
+    hover = [f"{r.share:.1%} of {'opponent ' if allowed else ''}shots · FG {r.fg:.0%} "
+             f"(league {r.lg_fg:.0%})<br>{-r.diff if allowed else r.diff:+.1f} points per 100 "
+             "shots vs league" for r in h.itertuples()]  # fmt: skip
+    st.plotly_chart(court.hex_court(h, mode, hover=hover), width="stretch",
+                    key=f"hex_{key}")  # fmt: skip
+    st.plotly_chart(court.hex_key(mode, unit="points per 100 shots vs league from the same "
+                                  "spots"), width="stretch", key=f"hexkey_{key}")  # fmt: skip
+
+
+def zone_charts(prof: pd.DataFrame, who: str, allowed: bool = False, key: str = "",
+                shots: pd.DataFrame | None = None, season: int | None = None,
+                stype: str = "regular") -> None:  # fmt: skip
+    """Shot map or zone court (how well) beside bars (how often, by zone), plus the table."""
     if prof.empty or prof.fga.sum() == 0:
         st.info("No zone data (shot locations exist from 1996-97).")
         return
@@ -140,14 +166,35 @@ def zone_charts(prof: pd.DataFrame, who: str, allowed: bool = False, key: str = 
     whose = "Opponents'" if allowed else who + ("'" if who.endswith("s") else "'s")
     c1, c2 = st.columns([3, 2], gap="large")
     with c1:
-        st.markdown(f"**{whose[:1].upper() + whose[1:]} FG% by zone**, against league average")
-        st.plotly_chart(court.zone_court(prof, mode, allowed), width="stretch",
-                        key=f"court_{key}")  # fmt: skip
-        st.caption(
-            "Each zone shows FG% and, below it, the gap to league average that season in "
-            "percentage points. Blue is good for "
-            + ("this defense (opponents shot worse)." if allowed else f"{who}; red is bad.")
-        )
+        view = "Zones"
+        if shots is not None and season is not None and not shots.empty:
+            view = st.segmented_control(
+                "Map",
+                ["Shot map", "Zones"],
+                default="Shot map",
+                key=f"mapview_{key}",
+                label_visibility="collapsed",
+            )
+        if view == "Shot map":
+            st.markdown(f"**{whose[:1].upper() + whose[1:]} shots**: where from, and how "
+                        "well against the league from the same spots")  # fmt: skip
+            shot_map(shots, season, stype, mode, allowed, key)
+            st.caption(
+                "Bigger hexagons: more shots from there. Color: points per 100 shots against "
+                "league average from the same spots, so a corner three is compared with corner "
+                "threes. Small samples are pulled toward the zone's average. Blue is good for "
+                + ("this defense (opponents scored less)." if allowed else f"{who}.")
+            )
+        else:
+            st.markdown(f"**{whose[:1].upper() + whose[1:]} FG% by zone**, against league "
+                        "average")  # fmt: skip
+            st.plotly_chart(court.zone_court(prof, mode, allowed), width="stretch",
+                            key=f"court_{key}")  # fmt: skip
+            st.caption(
+                "Each zone shows FG% and, below it, the gap to league average that season in "
+                "percentage points. Blue is good for "
+                + ("this defense (opponents shot worse)." if allowed else f"{who}; red is bad.")
+            )
     with c2:
         st.markdown(f"**Where {'opponents' if allowed else who} shot from**, share of shots")
         legend = "Opponents" if allowed else who[:1].upper() + who[1:]
@@ -340,11 +387,14 @@ def team_view() -> None:
     short = "the " + short_team(team, season)
     with tab_o:
         zone_charts(D.zone_profile(con, "metrics.team_season_counts", "a_", where,
-                                   [season, stype, team]), short, key="off")  # fmt: skip
+                                   [season, stype, team]), short, key="off",
+                    shots=D.shots(con, [season], stype, team_id=team), season=season,
+                    stype=stype)  # fmt: skip
     with tab_d:
         zone_charts(D.zone_profile(con, "metrics.team_season_counts", "o_", where,
-                                   [season, stype, team]), short, allowed=True,
-                    key="def")  # fmt: skip
+                                   [season, stype, team]), short, allowed=True, key="def",
+                    shots=D.shots(con, [season], stype, against=team), season=season,
+                    stype=stype)  # fmt: skip
 
     st.subheader("Season trend")
     g = D.ratings(con, "team_game", "r.season = ? and r.team_id = ? and r.measure in "
@@ -624,7 +674,8 @@ def player_view() -> None:
     zone_charts(D.zone_profile(con, "metrics.player_season_counts", "a_",
                                "c.season = ? and c.season_type = 'regular' and "
                                "c.person_id = ? and c.team_id = 0", [season, pid]),
-                name, key="player")  # fmt: skip
+                name, key="player", shots=D.shots(con, [season], "regular", person_id=pid),
+                season=season)  # fmt: skip
     st.subheader("Game log")
     g = D.ratings(con, "player_game", "r.person_id = ? and r.season = ? and r.measure in "
                   "('shooting', 'defense', 'ball_control')", [pid, season]).merge(
@@ -716,9 +767,15 @@ def coaches_view() -> None:
     coaches_page.render(_con(), team_label, _theme(), goto)
 
 
+def plays_view() -> None:
+    from courtvision.app import plays_page
+
+    plays_page.render(_con(), team_label, _players(), _theme(), goto)
+
+
 VIEWS = {"League": league_view, "Upcoming": upcoming_view, "Team": team_view,
-         "Game": game_view, "Player": player_view, "Coaches": coaches_view,
-         "Market": market_view, "Live": live_view}  # fmt: skip
+         "Game": game_view, "Player": player_view, "Plays": plays_view,
+         "Coaches": coaches_view, "Market": market_view, "Live": live_view}  # fmt: skip
 
 st.sidebar.title("courtvision")
 choice = st.sidebar.radio("View", list(VIEWS), key="view")
