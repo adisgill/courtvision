@@ -23,10 +23,10 @@ recommendation, and marks the places that change if you choose otherwise.
 | D1 | **0–100 mapping** | (a) `50 + 10·z`, clipped: 50 = league average, ±10 = ±1 SD; (b) percentile within season | **(a)**. Keeps magnitude, so "+8 tonight" means the same thing every season, and deltas are meaningful for the in-game use case. Percentiles flatten the tails and make deltas depend on where you start. |
 | D2 | **Free throws in Shooting** | (a) Shooting is field goals only (decomposes eFG%); (b) include FT trips (decomposes TS%) | **(a)**. The brief defines Shooting by court zone; FTs have no zone. FT *allowed* is in Defense; offensive FT rate is reported as a supporting stat. |
 | D3 | **Rebounding** | Not in any dimension as briefed. (a) leave out; (b) DREB% as a Defense component, OREB% as a Ball-control component | **(b)**, as separately reported components that can be switched off. Without it, Defense ignores ending the opponent's possession and the validation against Four Factors starts with a known hole. |
-| D4 | **What "restricted to guards / perimeter zones" means** for Backcourt/Frontcourt | (a) position filter only; (b) zone filter only; (c) both at once; (d) **offense by position, defense by zone** | **(d)**. Offense events have a known actor, so a guard's shots and turnovers are backcourt offense (all zones, including his drives). Defense has no known defender without tracking, so backcourt defense = opponent *perimeter* shots allowed, frontcourt defense = opponent *paint* shots allowed. |
+| D4 | **What "restricted to guards / perimeter zones" means** for Backcourt/Frontcourt | (a) position filter only; (b) zone filter only; (c) both at once; (d) **offense by position, defense by zone** | **(d)**. Offense events have a known actor, so a guard's shots and turnovers are backcourt offense (all zones, drives included). Defense has no known defender without tracking, so backcourt defense = opponent *perimeter* shots allowed, frontcourt defense = opponent *paint* shots allowed. |
 | D5 | **Multi-position players** (G-F, F-C flags) | (a) fractional: weight = flag share; (b) first flag wins; (c) per-game `startingPosition` for starters | **(a)**. G-F counts ½ backcourt, ½ frontcourt; F-C counts fully frontcourt. Weights sum to 1, so roll-ups stay exact. Flags are career-level, a known limitation. |
-| D6 | **Presence sample** | (a) on/off within games the player appeared in; (b) on/off over the whole season (includes games missed) | **(a)**. Removes schedule/injury confounding from "off" (e.g. a star's off-court sample being mostly games he sat out vs better teams). |
-| D7 | **Player-level Defense** | (a) on-court team defense (opponent events while he plays); (b) individually credited events (steals, blocks, charges, fouls); (c) blend | **(a)** as the rating, with (b) shown as supporting sub-ratings. (a) rolls up exactly to the team; (b) is attributable but covers a small part of defense. Without tracking, nothing better exists. |
+| D6 | **Presence sample** | (a) on/off within games the player appeared in; (b) on/off over the whole season (includes games missed) | **(a)**. Keeps games the player missed out of the "off" sample, so injuries and a different mix of opponents and teammates don't leak into the comparison. |
+| D7 | **Player-level Defense** | (a) on-court team defense (opponent events while the player is on the floor); (b) individually credited events (steals, blocks, charges, fouls); (c) blend | **(a)** as the rating, with (b) shown as supporting sub-ratings. (a) rolls up exactly to the team; (b) is attributable but covers a small part of defense. Without tracking, nothing better exists. |
 | D8 | **Stint (lineup) source for 1996-97 → 2024-25** | (a) reconstruct from Kaggle PBP substitutions; (b) pull `gamerotation` for every game (~37k requests, ~20 h) | **(a)**, validated against `gamerotation` on 2025-26 (already pulled); pull `gamerotation` only for games that fail reconstruction checks. |
 | D9 | **Era-gating rule** | (a) strict: a box-score input counts from the first season it is non-zero in ≥95% of team-games, sustained; (b) per-game gating with season coverage thresholds | **(a)** for v1. Simple and defensible; (b) can extend coverage into the 1970s later. |
 
@@ -48,8 +48,11 @@ current season's ratings drift until it ends.
 | Name | Definition | Used by |
 |---|---|---|
 | `FGA` | field-goal attempts in rated zones (backcourt heaves, 0.01% of shots, excluded) | Shooting |
-| `PLAYS` | `FGA + 0.44·FTA + TOV` (TOV includes team turnovers at team level) | Ball control |
-| `POSS` | tier A: **counted** from play-by-play (possession changes); box tiers: `FGA + 0.40·FTA − OREB + TOV` | Defense, Presence |
+| `PLAYS` | `FGA + c_FT·FTA + TOV` (TOV includes team turnovers at team level) | Ball control |
+| `POSS` | tier A: **counted** from play-by-play (possession changes); box tiers: `FGA + c_FT·FTA − OREB + TOV` | Defense, Presence |
+
+`c_FT = 0.40`, the share of free throws that end a trip, fitted below. One
+constant is used everywhere.
 
 **Possessions.** Kaggle's `possessions` (1996-97+) is an integer count, i.e.
 the NBA's official play-by-play count, not a formula. Tested against it
@@ -266,8 +269,8 @@ above from box scores. Earliest **1986-87** (3PA). **Tier B−**, from
 1983-84: no possessions without OREB and TOV. No player-level Defense before
 1996-97: no stints.
 
-Note for validation: opponent shot *making* is known to be mostly noise at
-small samples. The stabilization analysis will show whether `DM` deserves its
+Note for validation: opponent shot *making* (especially on threes) is widely
+found to be mostly noise at small samples; this data will tell us how much. The stabilization analysis will show whether `DM` deserves its
 full points weight; the spec keeps it, since it's real points allowed.
 
 ### 5.3 Ball control: turnovers, assists, possessions ending in a shot
@@ -321,8 +324,8 @@ Notes:
   exactly: turnovers forced and fouls with no credited player (e.g. an
   opponent's travel) belong to neither. The unattributed remainder is
   reported.
-* **Player level:** a player's Backcourt value is his contribution weighted
-  by `w_bc(p)`. Players with `w < 0.5` for a group get no rating in it; the
+* **Player level:** a player's Backcourt value is the player's contribution
+  weighted by `w_bc(p)`. Players with `w < 0.5` for a group get no rating in it; the
   reference population is players with `w ≥ 0.5`. So a guard's Backcourt
   rating is **rated among backcourt players**, which is the scouting view.
 * **Earliest:** **1996-97** (tier A). **Tier B (`Backcourt/Frontcourt (box)`,
@@ -404,7 +407,7 @@ baselines entirely.
 
 ## 7. Outputs and the CLI
 
-One command rebuilds everything from the raw caches:
+Planned (not built yet). One command rebuilds everything from the raw caches:
 
 ```bash
 uv run courtvision build              # kaggle-load → nba-api load → metrics, all seasons
