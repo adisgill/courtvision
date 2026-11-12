@@ -16,9 +16,11 @@ Ratings exist at three levels — player → game → team/season — and are al
 **era-adjusted**: every number is rated against league average for its own
 season, never compared across eras raw.
 
-> Status: **foundation**. Data ingest and the metric spec are being built; no
-> metrics or UI yet. See [`docs/metrics_spec.md`](docs/metrics_spec.md) and
-> [`docs/data_audit.md`](docs/data_audit.md).
+> Status: **foundation**. Ingest and the data audit are done; the metric spec
+> is a draft awaiting review. No metrics or UI yet.
+>
+> * [`docs/data_audit.md`](docs/data_audit.md): what's actually in the data, by era
+> * [`docs/metrics_spec.md`](docs/metrics_spec.md): formulas, scaling, roll-ups, earliest seasons
 
 ## Data sources
 
@@ -37,16 +39,40 @@ optional — every recipe is a one-line `uv run` command you can type yourself.
 
 ```bash
 uv sync
-cp .env.example .env    # then put your Kaggle API token in it
-uv run courtvision info
+cp .env.example .env                              # then put your Kaggle API token in it
+uv run courtvision ingest kaggle                  # download (~1.1 GB) + load (~1 min)
+uv run courtvision ingest nba-api --season 2025   # ~1.5 h cold, seconds once cached
+uv run courtvision audit kaggle                   # regenerate docs/audit/kaggle/*
+uv run courtvision audit nba-api --season 2025    # regenerate docs/audit/nba_api_2025.md
 ```
+
+Then query `data/courtvision.duckdb` with any DuckDB client:
+
+```sql
+select season, count(*) fga, avg(made::int) fg_pct
+from stg.shots where season_type = 'regular' group by 1 order by 1;
+```
+
+## Data model
+
+| Schema | What | Built by |
+|---|---|---|
+| `kaggle.*` | one view per Kaggle file, columns untouched | `ingest kaggle-load` |
+| `nba_api.*` | `game_log`, `shots`, `pbp`, `rotations`, `shot_zone_league_avg` | `ingest nba-api` |
+| `stg.*` | conformed keys (10-char `game_id`, `season`, `season_type`) and documented repairs: `games`, `players`, `player_games`, `team_games`, `pbp`, `shots` | `ingest kaggle-load` |
+
+Parquet under `data/parquet/` is the durable copy; the DuckDB file holds views
+over it and rebuilds in seconds. Raw downloads and every nba_api response
+(gzipped, with request parameters) are kept under `data/raw/`.
 
 ## Layout
 
 ```
 src/courtvision/   library + CLI (`courtvision ...`)
+  ingest/          Kaggle download/load, nba_api client + pull, staging views
+  audit.py         generates docs/audit/*
 tests/             pytest suite (offline by default)
-docs/              data audit and metric spec
+docs/              data audit, metric spec, generated audit appendices
 data/              gitignored: raw downloads, parquet, courtvision.duckdb
 ```
 

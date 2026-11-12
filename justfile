@@ -29,3 +29,16 @@ test:
 # show version and data locations
 info:
     uv run courtvision info
+
+# download + load the Kaggle dataset into Parquet/DuckDB
+kaggle:
+    uv run courtvision ingest kaggle
+
+# pull one nba_api season (cached; resumable), e.g. `just nba-api 2025`
+nba-api season:
+    uv run courtvision ingest nba-api --season {{season}}
+
+# regenerate docs/audit/* (Kaggle profile + nba_api join report)
+audit season="2025":
+    uv run courtvision audit kaggle
+    uv run courtvision audit nba-api --season {{season}}
