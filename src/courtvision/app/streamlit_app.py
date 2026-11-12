@@ -67,31 +67,63 @@ def rating_table(df: pd.DataFrame, measures: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def zone_charts(prof: pd.DataFrame, who: str, allowed: bool = False) -> None:
+def _theme() -> str:
+    theme = getattr(st.context, "theme", None)
+    return "dark" if theme is not None and theme.type == "dark" else "light"
+
+
+def zone_charts(prof: pd.DataFrame, who: str, allowed: bool = False, key: str = "") -> None:
+    """Court (how well, by zone) beside bars (how often, by zone), plus the table."""
     if prof.empty or prof.fga.sum() == 0:
         st.info("No zone data (shot locations exist from 1996-97).")
         return
-    sign = -1 if allowed else 1
-    hover = {
-        z: (
-            f"{court.ZONE_LABELS[z]}<br>{int(r.fga)} FGA, {r.unit_share:.1%} of shots "
-            f"(league {r.share:.1%})<br>FG {r.unit_fg_pct:.1%} (league {r.fg_pct:.1%})"
-        )
-        for z, r in prof.set_index("zone").iterrows()
-    }
-    c1, c2 = st.columns(2)
+    mode = _theme()
+    whose = "Opponents'" if allowed else who + ("'" if who.endswith("s") else "'s")
+    c1, c2 = st.columns([3, 2], gap="large")
     with c1:
-        vals = dict(zip(prof.zone, sign * prof.fg_pct_diff * 100, strict=True))
-        title = f"{who}: FG% {'allowed ' if allowed else ''}vs league (points of %)"
-        st.plotly_chart(court.zone_heatmap(vals, hover, title), width="stretch")
+        st.markdown(f"**{whose[:1].upper() + whose[1:]} FG% by zone**, against league average")
+        st.plotly_chart(court.zone_court(prof, mode, allowed), width="stretch",
+                        key=f"court_{key}")  # fmt: skip
+        st.caption(
+            "Each zone shows FG% and, below it, the gap to league average that season in "
+            "percentage points. Red: made more than average from there; blue: fewer."
+            + (" For a defense, blue is good." if allowed else "")
+        )
     with c2:
-        vals = dict(zip(prof.zone, prof.share_diff * 100, strict=True))
-        title = f"{who}: share of shots {'allowed ' if allowed else ''}vs league (points of %)"
-        st.plotly_chart(court.zone_heatmap(vals, hover, title), width="stretch")
-    if allowed:
-        st.caption("FG% map: blue = opponents shoot worse than league average from that zone.")
-    else:
-        st.caption("FG% map: red = better than league average from that zone.")
+        st.markdown(f"**Where {'opponents' if allowed else who} shot from**, share of shots")
+        legend = "Opponents" if allowed else who[:1].upper() + who[1:]
+        st.plotly_chart(court.shot_mix(prof, legend, mode),
+                        width="stretch", key=f"mix_{key}")  # fmt: skip
+        sel, mak = prof.selection_pp100.sum(), prof.making_pp100.sum()
+        if allowed:
+            st.caption(
+                f"Against this defense, where opponents shot from was worth **{sel:+.1f}** "
+                f"points per 100 shots compared with league average, and how many they made "
+                f"**{mak:+.1f}**. Positive is bad for the defense. Tick = league average."
+            )
+        else:
+            st.caption(
+                f"Where {who} shot from was worth **{sel:+.1f}** points per 100 shots "
+                f"compared with league average, and how many went in **{mak:+.1f}** (the "
+                "Shot quality and Shot making values). Tick = league average."
+            )
+    with st.expander("Zone table"):
+        t = prof.set_index("zone").reindex(court.ZONES).reset_index()
+        st.dataframe(
+            pd.DataFrame(
+                {
+                    "zone": t.zone.map(court.ZONE_LABELS),
+                    "shots": t.fga.astype(int),
+                    "share": (100 * t.unit_share).round(1),
+                    "league share": (100 * t.share).round(1),
+                    "FG%": (100 * t.unit_fg_pct).round(1),
+                    "league FG%": (100 * t.fg_pct).round(1),
+                    "pts/100 shots from selection": t.selection_pp100.round(2),
+                    "pts/100 shots from making": t.making_pp100.round(2),
+                }
+            ),
+            hide_index=True,
+        )
 
 
 # ---- views --------------------------------------------------------------------------------
@@ -133,12 +165,14 @@ def team_view() -> None:
     st.subheader("Shot zones")
     tab_o, tab_d = st.tabs(["Offense", "Defense (opponent shots)"])
     where = "c.season = ? and c.season_type = ? and c.team_id = ?"
+    short = "the " + team_label(team, season).split()[-1]
     with tab_o:
         zone_charts(D.zone_profile(con, "metrics.team_season_counts", "a_", where,
-                                   [season, stype, team]), "Offense")  # fmt: skip
+                                   [season, stype, team]), short, key="off")  # fmt: skip
     with tab_d:
         zone_charts(D.zone_profile(con, "metrics.team_season_counts", "o_", where,
-                                   [season, stype, team]), "Defense", allowed=True)  # fmt: skip
+                                   [season, stype, team]), short, allowed=True,
+                    key="def")  # fmt: skip
 
     st.subheader("Season trend (game ratings, 10-game rolling mean)")
     g = D.ratings(
@@ -310,7 +344,7 @@ def player_view() -> None:
         D.zone_profile(con, "metrics.player_season_counts", "a_",
                        "c.season = ? and c.season_type = 'regular' and c.person_id = ? "
                        "and c.team_id = 0", [season, pid]),
-        name,
+        name, key="player",
     )  # fmt: skip
     st.subheader("Game log")
     g = D.ratings(

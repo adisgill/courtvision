@@ -107,14 +107,26 @@ def zone_profile(con, counts_table: str, prefix: str, where: str, params: list) 
     if df.fga.sum() == 0:
         return df
     season = params[0]
-    lg = q(con, "select zone, share, fg_pct, xpts from metrics.zone_baselines where season = ?",
-           [season])  # fmt: skip
+    # one row per zone (1994-97 had 3s inside today's arc, so a zone can hold two values)
+    lg = q(
+        con,
+        """select zone, sum(share) as share, sum(fgm) / sum(fga) as fg_pct,
+                  sum(xpts * fga) / sum(fga) as xpts
+           from metrics.zone_baselines where season = ? and zone <> 'BACK' group by zone""",
+        [season],
+    )
     df = df.merge(lg, on="zone", how="left")
-    df["unit_share"] = df.fga / df.fga.sum()
+    total = df.fga.sum()
+    df["unit_share"] = df.fga / total
     df["unit_fg_pct"] = df.fgm / df.fga.where(df.fga > 0)
     df["share_diff"] = df.unit_share - df.share
     df["fg_pct_diff"] = df.unit_fg_pct - df.fg_pct
     value = df.zone.map({"RA": 2, "PAINT": 2, "MID": 2, "C3": 3, "ATB3": 3})
-    # points above league average from this zone, per 100 of the unit's shots
-    df["making_pp100"] = 100 * (value * df.fgm - df.xpts * df.fga) / df.fga.sum()
+    lg_pps = (df.share * df.xpts).sum() / df.share.sum()
+    # Points per 100 of the unit's shots vs league average, split the way Shooting is:
+    # selection (more shots from zones worth more than an average shot) and making
+    # (more made than league average from the same spots). Each sums over zones to
+    # the unit's shot quality / shot making on the FG-only scale.
+    df["selection_pp100"] = 100 * df.share_diff * (df.xpts - lg_pps)
+    df["making_pp100"] = 100 * (value * df.fgm - df.xpts * df.fga) / total
     return df
