@@ -19,6 +19,8 @@ LABELS = {
 COMPONENT_LABELS = {
     "shooting_sq": "Shot quality",
     "shooting_sm": "Shot making",
+    "shooting_fd": "Drawing fouls",
+    "shooting_fm": "Free-throw making",
     "defense_dq": "Shot quality allowed",
     "defense_dm": "Shot making allowed",
     "defense_dt": "Forced turnovers",
@@ -28,11 +30,13 @@ COMPONENT_LABELS = {
     "ball_bt": "Turnover avoidance",
     "ball_bo": "Offensive rebounding",
     "backcourt_sh": "Guard shooting",
+    "backcourt_ft": "Guard free throws",
     "backcourt_bt": "Guard ball security",
     "backcourt_dz": "Perimeter defense",
     "backcourt_dt": "Guard steals",
     "backcourt_df": "Guard fouls",
     "frontcourt_sh": "Big shooting",
+    "frontcourt_ft": "Big free throws",
     "frontcourt_bt": "Big ball security",
     "frontcourt_dz": "Paint defense",
     "frontcourt_dt": "Big steals",
@@ -92,6 +96,28 @@ def ratings(con, level: str, where: str, params: list) -> pd.DataFrame:
             join metrics.best_tier b using (level, season, measure, tier)
             where r.level = '{level}' and {where}""",
         params,
+    )
+
+
+def impact(con, person_id: int) -> pd.DataFrame:
+    """Per-possession impact by season (adjusted plus-minus), with role context."""
+    return q(
+        con,
+        """select i.*, r.usage, r.ast_pct, r.minutes
+           from metrics.player_impact i
+           left join metrics.player_role r
+             on r.person_id = i.person_id and r.season = i.season and r.team_id = 0
+            and r.season_type = 'regular'
+           where i.person_id = ? order by i.season""",
+        [person_id],
+    )
+
+
+def has_market(con) -> bool:
+    return bool(
+        q(
+            con, "select count(*) n from information_schema.tables where table_schema = 'market'"
+        ).n.iloc[0]
     )
 
 

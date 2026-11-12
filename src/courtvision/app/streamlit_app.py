@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 from courtvision.app import court
@@ -147,20 +148,45 @@ def team_view() -> None:
     if r.empty:
         st.warning("No ratings for this selection.")
         return
+    adj = D.q(
+        con,
+        """select a.measure, a.rating_adj, a.value_adj, a.schedule from metrics.team_season_adj a
+           join metrics.best_tier b
+             on b.level = 'team_season' and b.season = a.season and b.measure = a.measure
+            and b.tier = a.tier
+           where a.season = ? and a.team_id = ?""",
+        [season, team],
+    ).set_index("measure")
+    use_adj = stype == "regular" and not adj.empty and st.toggle(
+        "Adjust for opponents", value=False,
+        help="What the team would have posted against an average schedule at a neutral site.",
+    )  # fmt: skip
     d = r.set_index("measure")
     axes = [m for m in D.HEADLINE if m in d.index]
+    src = adj.rating_adj if use_adj else d.rating
     left, right = st.columns([1, 1])
     with left:
         st.plotly_chart(
             court.radar([D.LABELS[m] for m in axes],
-                        {team_label(team, season): [d.rating.get(m) for m in axes]}),
+                        {team_label(team, season): [src.get(m) for m in axes]}),
             width="stretch",
         )  # fmt: skip
         st.caption(
-            "Teams have five axes: Presence is an on/off measure of players (see the roster)."
+            "Teams have five axes: Presence is per-possession impact of players (see the "
+            "roster)." + (" Opponent-adjusted." if use_adj else "")
         )
     with right:
-        st.dataframe(rating_table(r, D.ordered(d.index)), hide_index=True, height=380)
+        table = rating_table(r, D.ordered(d.index))
+        if not adj.empty:
+            key = {D.LABELS.get(m) or D.COMPONENT_LABELS.get(m, m): m for m in adj.index}
+            table["opp-adjusted"] = table.measure.map(
+                lambda x: (
+                    round(float(adj.rating_adj.get(key.get(x), float("nan"))))
+                    if pd.notna(adj.rating_adj.get(key.get(x), float("nan")))
+                    else None
+                )
+            )
+        st.dataframe(table, hide_index=True, height=380)
 
     st.subheader("Shot zones")
     tab_o, tab_d = st.tabs(["Offense", "Defense (opponent shots)"])
@@ -198,22 +224,30 @@ def team_view() -> None:
         con,
         """select p.person_id, p.season_type,
                   p.shooting_rating, p.defense_rating, p.ball_control_rating,
-                  p.backcourt_rating, p.frontcourt_rating, ps.presence_rating,
-                  ps.presence_value, c.minutes
+                  p.backcourt_rating, p.frontcourt_rating, i.impact_rating as presence_rating,
+                  i.impact as impact_per100, i.points_added, r.usage, c.minutes
            from metrics.player_season p
            join metrics.player_season_counts c
              using (season, season_type, person_id, team_id)
-           left join metrics.presence_season ps
+           left join metrics.player_impact i on i.season = p.season and i.person_id = p.person_id
+           left join metrics.player_role r
              using (season, season_type, person_id, team_id)
            where p.season = ? and p.team_id = ? and p.season_type = ?
            order by c.minutes desc""",
         [season, team, stype],
     ).merge(_players(), on="person_id", how="left")
+    roster["usage"] = 100 * roster.usage
     cols = [
-        "player", "minutes", "shooting_rating", "defense_rating", "ball_control_rating",
-        "backcourt_rating", "frontcourt_rating", "presence_rating", "presence_value",
+        "player", "minutes", "usage", "shooting_rating", "defense_rating",
+        "ball_control_rating", "backcourt_rating", "frontcourt_rating", "presence_rating",
+        "impact_per100", "points_added",
     ]  # fmt: skip
     st.dataframe(roster[cols].round(1), hide_index=True)
+    st.caption(
+        "usage: share of the team's plays he finishes while on court (%). presence / "
+        "impact: per-possession impact (adjusted plus-minus, all teams that season), points "
+        "per 100 possessions; points added: over the season, vs league average."
+    )
 
 
 def game_view() -> None:
@@ -317,28 +351,81 @@ def player_view() -> None:
         "r.person_id = ? and r.season = ? and r.season_type = 'regular' and r.team_id = 0",
         [pid, season],
     )  # fmt: skip
-    pres = D.q(
-        con,
-        """select team_id, presence_rating, presence_value, minutes_on
-           from metrics.presence_season where person_id = ? and season = ?
-             and season_type = 'regular' order by minutes_on desc""",
-        [pid, season],
-    )
+    imp = D.impact(con, pid)
+    now = imp[imp.season == season]
     d = r.set_index("measure") if not r.empty else pd.DataFrame()
     axes = D.HEADLINE + ["presence"]
     vals = [d.rating.get(m) if not d.empty else None for m in D.HEADLINE]
-    vals.append(pres.presence_rating.iloc[0] if not pres.empty else None)
+    vals.append(now.impact_rating.iloc[0] if not now.empty else None)
     left, right = st.columns(2)
     with left:
         st.plotly_chart(court.radar([D.LABELS[m] for m in axes], {name: vals}),
                         width="stretch")  # fmt: skip
         st.caption(
             "Backcourt / Frontcourt are rated only among players at least half guard / "
-            "half forward-center. Presence is on/off for the team he played most for."
+            "half forward-center. Presence is per-possession impact (adjusted plus-minus)."
         )
     with right:
         if not r.empty:
             st.dataframe(rating_table(r, D.ordered(d.index)), hide_index=True, height=380)
+
+    st.subheader("Impact per possession")
+    if now.empty:
+        st.info("No lineup data for this season (play-by-play lineups exist from 1996-97).")
+    else:
+        i = now.iloc[0]
+        c = st.columns(5)
+        c[0].metric("Impact per 100 poss.", f"{i.impact:+.1f}", help="Points per 100 "
+                    "possessions vs league average, offense + defense, adjusted for "
+                    "teammates and opponents (ridge regression on every stint).")  # fmt: skip
+        c[1].metric("Offense / defense", f"{i.impact_off:+.1f} / {i.impact_def:+.1f}")
+        c[2].metric("Uncertainty (± 1 se)", f"{i.impact_se:.1f}")
+        c[3].metric("Points added", f"{i.points_added:+.0f}",
+                    help="Over the season vs league average: impact x possessions.")  # fmt: skip
+        per36 = i.points_added / i.minutes * 36 if pd.notna(i.minutes) and i.minutes else None
+        c[4].metric("Per 36 minutes", f"{per36:+.1f}" if per36 is not None else "—",
+                    help="Points added per 36 minutes played. Prefer the per-possession "
+                    "number to compare players on fast and slow teams.")  # fmt: skip
+        role = (f"Usage {100 * i.usage:.0f}% of team plays, assists on "
+                f"{100 * i.ast_pct:.0f}% of teammates' baskets while on court."
+                if pd.notna(i.usage) else "")  # fmt: skip
+        st.caption(
+            f"{int(i.poss):,} possessions on court. Season-only estimate (no prior): "
+            f"{i.season_only:+.1f}. {role}"
+        )
+        hist = imp.dropna(subset=["impact"])
+        if len(hist) > 1:
+            fig = go.Figure([
+                go.Scatter(x=list(hist.season) + list(hist.season[::-1]),
+                           y=list(hist.impact + hist.impact_se)
+                           + list((hist.impact - hist.impact_se)[::-1]),
+                           fill="toself", line={"width": 0}, hoverinfo="skip",
+                           fillcolor="rgba(57,135,229,0.18)", showlegend=False),
+                go.Scatter(x=hist.season, y=hist.impact, mode="lines+markers",
+                           line={"color": "#3987e5", "width": 2}, name="impact",
+                           hovertemplate="%{x}: %{y:+.1f} per 100<extra></extra>"),
+            ])  # fmt: skip
+            fig.add_hline(y=0, line_color="#898781", line_width=1)
+            fig.update_layout(height=260, margin={"l": 0, "r": 0, "t": 10, "b": 0},
+                              showlegend=False,
+                              yaxis={"title": "pts / 100 poss."},
+                              xaxis={"title": "season (start year)"})  # fmt: skip
+            st.plotly_chart(fig, width="stretch")
+            st.caption("Band: ± 1 standard error.")
+    if D.has_market(con):
+        mk = D.q(con, "select * from market.players where person_id = ?", [pid])
+        if not mk.empty and pd.notna(mk.impact.iloc[0]):
+            m = mk.iloc[0]
+            st.subheader(f"Market ({int(m.season)}-{(int(m.season) + 1) % 100:02d})")
+            c = st.columns(4)
+            sal = f"${m.salary / 1e6:.1f}M" if pd.notna(m.salary) else "unsigned"
+            c[0].metric("Salary", sal)
+            c[1].metric("Estimated fair salary", f"${m.fair_salary / 1e6:.1f}M")
+            c[2].metric("Wins above replacement", f"{m.war:.1f}",
+                        help=f"Bad / good case: {m.war_p10:.1f} / {m.war_p90:.1f}")  # fmt: skip
+            c[3].metric("Risk", m.risk)
+            if m.risk_flags is not None and len(m.risk_flags):
+                st.caption("Risk factors: " + "; ".join(m.risk_flags))
     st.subheader("Shot zones")
     zone_charts(
         D.zone_profile(con, "metrics.player_season_counts", "a_",
@@ -370,7 +457,14 @@ def live_view() -> None:
     live_page.render(_con())
 
 
-VIEWS = {"Team": team_view, "Game": game_view, "Player": player_view, "Live": live_view}
+def market_view() -> None:
+    from courtvision.app import market_page
+
+    market_page.render(_con(), team_label, _theme())
+
+
+VIEWS = {"Team": team_view, "Game": game_view, "Player": player_view, "Market": market_view,
+         "Live": live_view}  # fmt: skip
 
 st.sidebar.title("courtvision")
 choice = st.sidebar.radio("View", list(VIEWS))
