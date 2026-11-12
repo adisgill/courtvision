@@ -16,13 +16,17 @@ Ratings exist at three levels — player → game → team/season — and are al
 **era-adjusted**: every number is rated against league average for its own
 season, never compared across eras raw. Team ratings also come **opponent-adjusted**.
 
-On top of the ratings, a **player market** prices every player (wins above
-replacement from per-possession impact, in dollars), reads each team's payroll
-against the cap, tax and aprons, finds where each team is short, and lists the
-players who would fix it, with what they cost and how risky they are.
+On top of the ratings, a **player market** prices every player (market comparables:
+his rank in value priced at the same rank of veteran salaries), keeps every contract
+through 2030-31 with its options, reads each team's payroll against the cap, tax and
+aprons, finds where each team is short, lists the players who would fix it (trades,
+unsigned players, next summer's free agents) with cost and risk, and projects every
+team's cap space next summer. **Forecasts** predict each team's next game: dimension
+ratings, every expected player, the margin and the win chance.
 
-> Status: **v1.2** for every season from 1974-75 (box-score tiers) and 1996-97
-> (play-by-play), with a validation report, a visualizer, a live mode and the market.
+> Status: **v1.3** for every season from 1974-75 (box-score tiers) and 1996-97
+> (play-by-play), with a validation report, a visualizer, a live mode, the market and
+> next-game forecasts.
 >
 > * [`docs/metrics_spec.md`](docs/metrics_spec.md): formulas, scaling, roll-ups, tiers, acceptance tests
 > * [`docs/validation.md`](docs/validation.md): stabilization, persistence, signal beyond Four Factors
@@ -41,6 +45,11 @@ players who would fix it, with what they cost and how risky they are.
    (attribution: MrBridge, mr-bridge.com; research and educational use): player
    salaries (a HoopsHype snapshot of 2026-07-07), payrolls, and cap / tax / apron
    levels. Used only by the market model.
+4. **Kaggle** — [`deocheng/nba-data-1946-2026`](https://www.kaggle.com/datasets/deocheng/nba-data-1946-2026)
+   (Apache-2.0 on Kaggle; scraped from Basketball-Reference, 17–23 June 2026): only
+   `public.player_contracts`, every contract's future years and options.
+5. **You** — optional `data/salary_overrides.csv` for deals signed after those snapshots
+   (format: [`docs/salary_overrides.example.csv`](docs/salary_overrides.example.csv)).
 
 No player-tracking data is used; none is public.
 
@@ -55,10 +64,11 @@ cp .env.example .env                              # then put your Kaggle API tok
 uv run courtvision ingest kaggle                  # download (~1.1 GB) + load (~1 min)
 uv run courtvision ingest nba-api --season 2025   # optional: ~1 h cold, for validation (T3, T6)
 uv run courtvision metrics build                  # every rating, all seasons (~9 min)
-uv run courtvision ingest salaries                # salaries + cap thresholds (seconds)
-uv run courtvision market build                   # value, budgets, needs, options
+uv run courtvision ingest salaries                # salaries, contracts, cap thresholds
+uv run courtvision market build                   # value, budgets, needs, options, free agency
+uv run courtvision forecast                       # each team's next game + backtest (seconds)
 uv run courtvision validate                       # regenerate docs/validation.md
-uv run courtvision app                            # league / team / game / player / market / live
+uv run courtvision app                            # league / upcoming / team / game / player / market / live
 uv run courtvision live                           # today's games; --game-id X rates one
 ```
 
@@ -82,8 +92,9 @@ order by defense_rating desc;
 | `nba_api.*` | `game_log`, `shots`, `pbp`, `rotations`, `shot_zone_league_avg` | `ingest nba-api` |
 | `stg.*` | conformed keys (10-char `game_id`, `season`, `season_type`) and documented repairs: `games`, `players`, `player_games`, `team_games`, `pbp`, `shots`, `events` | `ingest kaggle-load` |
 | `metrics.*` | possessions, lineups, counts, league baselines, ratings (`team_game`, `team_season`, `player_game`, `player_season`, `presence_season`, `ratings_long`, ...), `player_impact` (per-possession impact), `team_season_adj` (opponent-adjusted), `player_role` (usage); see spec section 7 | `metrics build` |
-| `salary.*` | `contracts` (salaries matched to NBA ids), `cap`, `min_salaries`, `team_payrolls`, ... | `ingest salaries` |
-| `market.*` | `players` (value, price, risk), `teams` (budget, needs), `options`, `params` | `market build` |
+| `salary.*` | `book` (every contract by season, with options), `contract_summary` (status next summer), `contracts` (July snapshot, NBA ids), `cap`, `min_salaries`, ... | `ingest salaries` |
+| `market.*` | `players` (value, price, contract, risk), `teams` (budget, needs, next summer's space), `options`, `fa_class`, `fa_options`, `params` | `market build` |
+| `forecast.*` | `games` (margin, win chance), `team` (predicted dimensions), `players`, `backtest_team`, `backtest_games` | `forecast` |
 
 Parquet under `data/parquet/` is the durable copy; the DuckDB file holds views
 over it and rebuilds in seconds. Raw downloads and every nba_api response

@@ -1,9 +1,11 @@
 # Metrics spec
 
-**Status: v1.2.** v1.0 approved 2026-11-12 with every recommended decision
+**Status: v1.3.** v1.0 approved 2026-11-12 with every recommended decision
 (D1–D9); v1.1 (free throws, fouls valuation, role, per-possession impact, opponent
 adjustment, market model) approved the same day, see [section 11](#11-v11-2026-11-12);
-v1.2 (box-score prior for impact) also the same day, see [section 12](#12-v12-2026-11-12).
+v1.2 (box-score prior for impact) also the same day, see [section 12](#12-v12-2026-11-12);
+v1.3 (contracts, market-comparables pricing, free agency, NBA.com advanced stats) and
+next-game forecasts in sections 13 and 14.
 Implemented in `src/courtvision/metrics/` and `src/courtvision/market.py`;
 `uv run courtvision build` reproduces every number. Section 10 records what
 implementation added or settled beyond the draft; section 8 has the
@@ -16,7 +18,8 @@ Contents: [0 Decisions](#0-decisions) ·
 [6 Availability](#6-availability-by-era) · [7 Outputs & CLI](#7-outputs-and-the-cli) ·
 [8 Acceptance tests](#8-acceptance-tests) · [9 Out of scope](#9-out-of-scope-for-v1) ·
 [10 Implementation notes](#10-implementation-notes-v10) · [11 v1.1](#11-v11-2026-11-12) ·
-[12 v1.2](#12-v12-2026-11-12)
+[12 v1.2](#12-v12-2026-11-12) · [13 v1.3](#13-v13-contracts-pricing-free-agency-nbacom-advanced-stats-2026-11-12) ·
+[14 Forecasts](#14-forecasts-for-each-teams-next-game-2026-11-12)
 
 ---
 
@@ -760,3 +763,103 @@ behind it the shrinkage is under 2%.
 
 The market (11.6) needs no change: it reads `player_impact`, so prices, risk and
 options update with every build.
+
+## 13. v1.3: contracts, pricing, free agency, NBA.com advanced stats (2026-11-12)
+
+Requested by the user after reviewing v1.2 ("the salary seems off"; "keep player
+contracts, free agency and upcoming free agents in mind"; "something about Dyson
+Daniels' fair salary looks wrong"; "are we using all the Kaggle data and tracking
+metrics properly?"). Review findings, all fixed:
+
+* 63 players playing in 2026-27 had no 2026-27 salary (signed after the 7 July
+  snapshot) and were treated as unsigned free agents.
+* 27 players traded since July were charged to their old teams ($248M of payroll).
+* Two-way contracts ($36M) were counted in payroll; they don't count against the cap.
+* Fair salary was capped at 35% of the cap for everyone; the maximum depends on years
+  of service (25% / 30% / 35%). Daniels (4 years) can't earn more than 25%.
+* The replacement level (about league average) and a linear $-per-win spread the whole
+  salary pool over above-average players only, inflating every good player's price.
+
+### 13.1 The contract book
+
+`courtvision.ingest.contracts` builds `salary.book` (player × season, 2026-27 to
+2030-31) and `salary.contract_summary` from three sources, newest winning for the
+season it covers: Basketball-Reference contracts scraped 17–23 June 2026 (Kaggle
+`deocheng/nba-data-1946-2026`, `public.player_contracts`: every year's salary and
+option), the July snapshot, and the user's `data/salary_overrides.csv`
+(`docs/salary_overrides.example.csv`). The module docstring lists the rules. Highlights:
+a July salary within 10% of Basketball-Reference's for 2026-27 continues that contract's
+later years; a new July deal has unknown length; an option year with no July row was
+declined; this year's first-round picks follow the rookie scale (two guaranteed years,
+team options on years 3–4); every contract is charged to the team the player plays for
+now, waived money stays with the team that waived him; two-way deals are listed but
+not counted; a player playing now with no contract anywhere is `unknown`, never a free
+agent. Status next summer: UFA, RFA (rookie scale ending, or two-way), player / team
+option, under contract, or length unknown. Basketball-Reference names arrive
+double-encoded (UTF-8 read as Latin-1); `fix_mojibake` repairs them before matching.
+
+### 13.2 Fair salary: market comparables by rank
+
+`value = (impact − R) × projected possessions / 200` (points above replacement). The
+market curve maps the percentile of a player's value among last season's veteran
+contracts (rookie-scale and two-way excluded) to the same percentile of their salaries
+as a share of the cap (quantile matching): the Nth most valuable player is priced at
+the Nth-highest salary. Fair salary = that share × this season's cap, between the
+veteran minimum and the player's service maximum. `R` is chosen by 5-fold
+cross-validation of that mapping over {−1, −1.5, −2, −2.5, −3} pts/100 (the market pays
+for minutes as well as per-possession impact; it picks −2.5). A second price from the
+box-score model alone (`fair_box`) is shown beside it, and a risk flag fires when impact
+exceeds the box score by 2.5 or more ("value rests on plus-minus"). The chance of being
+overpaid compares the price across ±1.96 se of impact with the salary, a max player
+judged against his max. Other new flags: a contract of 3+ seasons at 20%+ of the cap.
+
+### 13.3 Free agency
+
+* **Now:** players who played last season or this one, with no contract and not playing.
+* **Next summer (`market.fa_class`):** UFA, RFA, player and team options. Next season's
+  impact = impact + the aging curve's change; projected fair salary from the same
+  market curve against next season's cap (this season's × 1.07; the 2025-26 → 2026-27
+  rise was 6.7%; the dataset's 10% figure is a mechanical upper path).
+* **Cap space next summer (`market.teams.next_*`):** projected cap minus committed money
+  (guaranteed, options assumed picked up, July deals of unknown length assumed to run
+  on); a best case with options declined. Cap holds and exceptions are not modelled.
+* **`market.fa_options`:** for each team need, next summer's free agents who fill it,
+  wins added over the weakest rotation player at the position, and whether his
+  projected price fits the team's projected space.
+
+### 13.4 NBA.com's advanced stats
+
+`metrics.player_advanced` computes stats.nba.com's advanced player table (off/def/net
+rating on court, AST%, AST/TO, AST ratio, OREB/DREB/REB%, TO ratio, eFG%, TS%, USG%,
+pace) from our counts and lineups, only over games with rebuilt lineups. Validation
+section 8 compares them with the official values in `kaggle.player_statistics_extended`
+(r 0.986–1.000 for everything but rebound % — NBA.com counts team rebounds as available,
+we don't — so lineups and possessions are tracked right in every season). PIE is taken
+from NBA.com directly: its published values don't follow its published formula
+consistently. Section 8 also lists what every Kaggle table feeds.
+
+## 14. Forecasts for each team's next game (2026-11-12)
+
+Requested by the user: predict what the game view shows, for the closest upcoming game
+of every team, at team and player level, from trends, form, player form and opponent
+strength. `courtvision forecast` (`courtvision.forecast`, schema `forecast`):
+
+* **Upcoming games** from `kaggle.league_schedule_26_27`: each team's next game from
+  today on (games between the data's last day and today were played but aren't in the
+  data yet).
+* **Team dimensions:** for each of 16 measures, `value(team, game) = μ + form[team] +
+  opp[opponent] + h·site`, weighted least squares with ridge 4: this season's games plus
+  last season's at ¼ weight, weights halving every 21 days. Prediction rated on the
+  season's team-game reference; compared with the team's season-average game rating.
+* **Margin and win chance:** a blend of the same model on net points per 100 (team
+  form) and the roster view (each expected player's impact × expected minutes / 48,
+  plus home court), × expected possessions / 100. Win chance = Φ(margin / σ).
+* **Players:** expected minutes from recent games (weights halving every 6 games), for
+  players in one of the team's last three games (there is no injury feed); each
+  dimension's value = recent form (exposure-weighted, halving every 6 games) shrunk
+  toward the season level with 120 exposure units of prior, plus the opponent's effect.
+* **Backtest** (`forecast.backtest_*`): the last complete season re-predicted week by
+  week from earlier games only (the roster view uses the previous season's impact, so
+  nothing leaks). 2025-26: blend 75% form / 25% roster; margin error 11.5 points (13.4
+  picking the home team), 68% of winners (55%), Brier 0.207 (0.25), σ 14.6. Team
+  dimensions beat each team's season-to-date average on 15 of 16 measures.
