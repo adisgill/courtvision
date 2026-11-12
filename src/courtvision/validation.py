@@ -10,6 +10,8 @@ Four questions, each answered from the built ``metrics`` schema:
    predict second-half net rating better than first-half net rating or the Four Factors?
 4. **Tier agreement (T7)**: how closely do box-score tiers track the play-by-play tier
    where both exist?
+5. **Agreement with NBA.com**: do the parts add up to the NBA's offensive, defensive and
+   net rating, and how do player ratings relate to PIE?
 """
 
 from __future__ import annotations
@@ -182,11 +184,155 @@ def scale_summary(con) -> pd.DataFrame:
     """).df()
 
 
+def _nba_team_seasons(con, first: int = FIRST, last: int = LAST) -> pd.DataFrame:
+    """NBA.com's official team ratings per regular season (from the advanced box score
+    in ``kaggle.team_statistics_extended``) beside our values, all relative to league."""
+    df = con.sql(f"""
+        with g as (
+            select cv_season(e.gameId) as season, e.teamId as team_id, e.win::int as win,
+                   e.possessions as poss, e.offensiveRating as ortg,
+                   e.defensiveRating as drtg
+            from kaggle.team_statistics_extended e
+            join stg.games s on s.game_id = lpad(e.gameId::varchar, 10, '0')
+            where s.season_type = 'regular' and e.possessions > 0
+              and s.season between {first} and {last}
+        ),
+        t as (
+            select season, team_id, avg(win) as win_pct,
+                   sum(ortg * poss) / sum(poss) as ortg, sum(drtg * poss) / sum(poss) as drtg,
+                   sum(poss) as nba_poss
+            from g group by all
+        )
+        select t.*,
+               t.ortg - sum(t.ortg * t.nba_poss) over w / sum(t.nba_poss) over w as ortg_rel,
+               t.drtg - sum(t.drtg * t.nba_poss) over w / sum(t.nba_poss) over w as drtg_rel,
+               v.shooting_rating, v.ball_control_rating, v.defense_rating,
+               v.backcourt_rating, v.frontcourt_rating,
+               -- per 100 possessions, so every part is on the net-rating scale
+               v.shooting_sq_value * c.fga / c.poss as shooting_sq,
+               v.shooting_sm_value * c.fga / c.poss as shooting_sm,
+               v.ball_bt_value * c.b_plays / c.poss as ball_bt,
+               v.ball_bo_value as ball_bo,
+               v.defense_dq_value as defense_dq, v.defense_dm_value as defense_dm,
+               v.defense_dt_value as defense_dt, v.defense_df_value as defense_df,
+               v.defense_dr_value as defense_dr
+        from t
+        join metrics.team_season v
+          on v.season = t.season and v.team_id = t.team_id and v.season_type = 'regular'
+        join metrics.team_season_counts c
+          on c.season = t.season and c.team_id = t.team_id and c.season_type = 'regular'
+        window w as (partition by t.season)
+    """).df()
+    df["net_rel"] = df.ortg_rel - df.drtg_rel
+    df["offense"] = df[["shooting_sq", "shooting_sm", "ball_bt", "ball_bo"]].sum(axis=1)
+    df["defense"] = df[[c for c in COMPONENTS if c.startswith("defense")]].sum(axis=1)
+    df["total"] = df.offense + df.defense
+    return df
+
+
+def _ols_r2(df: pd.DataFrame, y: str, cols: list[str]) -> tuple[float, np.ndarray]:
+    x = np.column_stack([np.ones(len(df)), *(df[c] for c in cols)])
+    beta, *_ = np.linalg.lstsq(x, df[y], rcond=None)
+    resid = df[y] - x @ beta
+    return float(1 - resid.var() / df[y].var()), beta
+
+
+def nba_agreement(con) -> dict[str, pd.DataFrame]:
+    """How the ratings line up with NBA.com's offensive, defensive and net rating (teams)
+    and with PIE and on-court net rating (players)."""
+    t = _nba_team_seasons(con)
+    four = _four_factors(
+        con,
+        f"""(select *, null as net_rtg from metrics.team_season_counts
+             where season_type = 'regular' and season between {FIRST} and {LAST})""",
+    ).drop(columns="net_rtg")
+    ff = four.columns.drop(["season", "team_id"]).tolist()
+    four[ff] = four[ff] - four.groupby("season")[ff].transform("mean")  # relative to league
+    t = t.merge(four, on=["season", "team_id"])
+    off_ff = [c for c in ff if c.startswith("off_")]
+    def_ff = [c for c in ff if c.startswith("def_")]
+    rows = []
+    for target, label, ours, theirs in [
+        ("ortg_rel", "offensive rating", "offense", off_ff),
+        ("drtg_rel", "defensive rating", "defense", def_ff),
+        ("net_rel", "net rating", "total", ff),
+    ]:
+        rows.append({
+            "NBA.com": label,
+            "our parts, plain sum (r²)": t[ours].corr(t[target]) ** 2,
+            "our parts, fitted (R²)": _ols_r2(
+                t, target,
+                [c for c in COMPONENTS
+                 if ours == "total" or c.startswith("defense") == (ours == "defense")],
+            )[0],
+            "Four Factors, fitted (R²)": _ols_r2(t, target, theirs)[0],
+        })  # fmt: skip
+    rows.append({
+        "NBA.com": "win %",
+        "our parts, plain sum (r²)": t.total.corr(t.win_pct) ** 2,
+        "our parts, fitted (R²)": _ols_r2(t, "win_pct", COMPONENTS)[0],
+        "Four Factors, fitted (R²)": _ols_r2(t, "win_pct", ff)[0],
+    })  # fmt: skip
+    fit = pd.DataFrame(rows)
+    fit.attrs["team_seasons"] = len(t)
+    fit.loc[len(fit)] = {"NBA.com": "win % from NBA net rating itself",
+                         "our parts, plain sum (r²)": t.net_rel.corr(t.win_pct) ** 2}  # fmt: skip
+
+    _, beta = _ols_r2(t, "net_rel", COMPONENTS)
+    weights = pd.DataFrame({"component": COMPONENTS, "weight in NBA net rating": beta[1:],
+                            "sd (pts/100 poss.)": [t[c].std() for c in COMPONENTS]})  # fmt: skip
+
+    p = con.sql(f"""
+        with n as (
+            select cv_season(e.gameId) as season, e.personId as person_id,
+                   count(distinct e.playerteamId) as teams, sum(e.possessions) as poss,
+                   sum(e.playerImpactEstimate * e.possessions) / sum(e.possessions) as pie,
+                   sum(e.netRating * e.possessions) / sum(e.possessions) as on_court_net,
+                   sum(e.usagePercentage * e.possessions) / sum(e.possessions) as usage
+            from kaggle.player_statistics_extended e
+            join stg.games s on s.game_id = lpad(e.gameId::varchar, 10, '0')
+            where s.season_type = 'regular' and e.possessions > 0
+              and s.season between 2013 and {LAST}
+            group by all
+            having sum(e.possessions) >= 2000 and count(distinct e.playerteamId) = 1
+        )
+        select n.*, v.shooting_rating, v.defense_rating, v.ball_control_rating,
+               v.backcourt_rating, v.frontcourt_rating, ps.presence_rating
+        from n
+        join metrics.player_season v
+          on v.season = n.season and v.person_id = n.person_id and v.team_id = 0
+         and v.season_type = 'regular'
+        left join metrics.presence_season ps
+          on ps.season = n.season and ps.person_id = n.person_id
+         and ps.season_type = 'regular'
+    """).df()
+    players = pd.DataFrame([
+        {"our rating": m, "r with PIE": p[m].corr(p.pie),
+         "r with on-court net rating": p[m].corr(p.on_court_net),
+         "r with usage %": p[m].corr(p.usage)}
+        for m in ["shooting_rating", "defense_rating", "ball_control_rating",
+                  "backcourt_rating", "frontcourt_rating", "presence_rating"]
+    ])  # fmt: skip
+    q = p.dropna(subset=["shooting_rating", "defense_rating", "ball_control_rating",
+                         "presence_rating"])  # fmt: skip
+    ours4 = ["shooting_rating", "defense_rating", "ball_control_rating", "presence_rating"]
+    players.attrs.update(
+        player_seasons=len(p),
+        r2_pie_ours=_ols_r2(q, "pie", ours4)[0],
+        r2_pie_usage=_ols_r2(q, "pie", ["usage"])[0],
+        r2_pie_both=_ols_r2(q, "pie", [*ours4, "usage"])[0],
+    )
+    return {"fit": fit, "weights": weights, "players": players}
+
+
 def _md_table(df: pd.DataFrame, floatfmt: str = ".3f") -> str:
     cols = list(df.columns)
     lines = ["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
     for row in df.itertuples(index=False):
-        cells = [format(v, floatfmt) if isinstance(v, float) else str(v) for v in row]
+        cells = [
+            ("" if np.isnan(v) else format(v, floatfmt)) if isinstance(v, float) else str(v)
+            for v in row
+        ]
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
 
@@ -199,6 +345,7 @@ def report(con) -> str:
     pred = predictive(halves)
     tiers = tier_agreement(con)
     scale = scale_summary(con)
+    nba = nba_agreement(con)
     head = [c for c in pers.measure if c in (*M.HEADLINE, *COMPONENTS, "net_rtg", *FOUR_FACTORS)]
     parts = [
         "# Validation",
@@ -246,6 +393,35 @@ def report(con) -> str:
         "Regular-season ratings of qualified units for the headline dimensions.",
         "",
         _md_table(scale),
+        "",
+        "## 6. Agreement with NBA.com's ratings",
+        "",
+        "NBA.com's official offensive, defensive and net rating come from the advanced box "
+        "score in `kaggle.team_statistics_extended`, possession-weighted over each regular "
+        f"season and taken relative to league average ({nba['fit'].attrs['team_seasons']} "
+        "team-seasons). Our parts are converted to points per 100 possessions. *Plain sum* "
+        "adds them with no fitting, as the spec intends: the parts are in points, so a "
+        "plain sum should track the NBA's rating. *Fitted* lets a regression reweight them; "
+        "the Four Factors (relative to league) are fitted the same way, for reference.",
+        "",
+        _md_table(nba["fit"]),
+        "",
+        "Weight of each part when NBA net rating is regressed on all of them. A part whose "
+        "points value is right gets a weight near 1 (the composite turns out to run about "
+        "15% hot overall, so ~0.85-0.9 is normal). A weight far below that means the part "
+        "is valued too highly.",
+        "",
+        _md_table(nba["weights"]),
+        "",
+        "**Players** (2013-14 on, one team, >= 2,000 possessions; "
+        f"{nba['players'].attrs['player_seasons']} player-seasons). NBA.com's player rating "
+        "is PIE, a share of the game's box-score events, so it rewards volume. Our ratings "
+        f"are rates. R² of PIE from our four ratings: "
+        f"{nba['players'].attrs['r2_pie_ours']:.2f}; from usage alone: "
+        f"{nba['players'].attrs['r2_pie_usage']:.2f}; from both: "
+        f"{nba['players'].attrs['r2_pie_both']:.2f}.",
+        "",
+        _md_table(nba["players"]),
         "",
     ]
     return "\n".join(parts)
