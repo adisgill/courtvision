@@ -318,6 +318,22 @@ def coaching_cmd() -> None:
             typer.echo(coaching.value(con)["reliability"].round(3).to_string(index=False))
 
 
+@app.command("plays")
+def plays_cmd() -> None:
+    """Play types from play-by-play (2015-16 on; after `coaching`) -> plays.* (shots, team
+    and player mix and efficiency, passing, turnovers, reliability, matchup test)."""
+    import logging
+
+    from courtvision import plays
+    from courtvision.db import connect
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    with connect() as con:
+        typer.echo(plays.build(con))
+        mt = con.execute("select * from plays.matchup_test").df()
+    typer.echo(mt.round(3).to_string(index=False))
+
+
 @app.command("walkforward")
 def walkforward_cmd() -> None:
     """Walk-forward test of game and player predictions (2021-22 to 2025-26, weekly, only
@@ -404,7 +420,7 @@ def build(
     workers: int | None = typer.Option(None, help="Parallel play-by-play workers."),
 ) -> None:
     """Rebuild everything from the raw caches: kaggle-load -> nba-api load -> metrics ->
-    salaries -> market -> coaches -> coaching -> walk-forward -> forecast."""
+    salaries -> market -> coaches -> coaching -> plays -> walk-forward -> forecast."""
     from courtvision.db import connect
     from courtvision.ingest import nba_api_pull
 
@@ -425,6 +441,7 @@ def build(
     if _has_coach_files():
         ingest_coaches(download=False, fetch_current=False)
         coaching_cmd()
+        plays_cmd()
         walkforward_cmd()
     else:
         typer.echo("no coach cache: run `courtvision ingest coaches` for coaching and the "

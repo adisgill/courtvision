@@ -592,6 +592,7 @@ def report(con) -> str:
         _md_table(KAGGLE_USE),
         "",
         *walkforward_sections(con),
+        *plays_section(con),
     ]
     return "\n".join(parts)
 
@@ -694,3 +695,38 @@ def walkforward_sections(con) -> list[str]:
             "",
         ]
     return parts
+
+
+def plays_section(con) -> list[str]:
+    """Section 11: play types (only once ``courtvision plays`` has run)."""
+    if not _has_table(con, "plays", "reliability"):
+        return []
+    rel = con.sql("select * from plays.reliability order by side, play").df()
+    mt = con.sql("select * from plays.matchup_test").df()
+    lg = con.sql("select season, play, share from plays.league").df()
+    mix = lg.pivot(index="play", columns="season", values="share")
+    mix.columns = [f"{c}-{(c + 1) % 100:02d}" for c in mix.columns]
+    mix = (100 * mix).round(1).reset_index()
+    return [
+        "## 11. Play types",
+        "",
+        "Share of all shots by play type and season (%). Tagging grew more detailed over the "
+        "years, which is why every team number is taken against its own season's league.",
+        "",
+        _md_table(mix, ".1f"),
+        "",
+        "Reliability: odd vs even games of each team-season. `share_r` for how often a team "
+        "uses the play, `efficiency_r` for its points per 100 shots against league; `k` "
+        "(shots) = n_half (1 - r) / r is the shrinkage each play's efficiency gets.",
+        "",
+        _md_table(
+            rel[["play", "side", "share_r", "efficiency_r", "n_half", "k", "team_seasons"]]
+        ),  # fmt: skip
+        "",
+        "Matchup test: each season's second-half team-games from its first half. Reduction "
+        "in shot-weighted squared error against league average, from the offense's own "
+        "shrunk number and from offense plus the opponent defense's allowance (%).",
+        "",
+        _md_table(mt),
+        "",
+    ]

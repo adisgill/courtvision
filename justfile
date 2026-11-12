@@ -68,10 +68,11 @@ app:
 live game_id="":
     uv run courtvision live {{ if game_id == "" { "" } else { "--game-id " + game_id } }}
 
-# coaches of every game, then coaching analytics from play-by-play
+# coaches of every game, coaching analytics and play types from play-by-play
 coaching:
     uv run courtvision ingest coaches --fetch-current
     uv run courtvision coaching
+    uv run courtvision plays
 
 # walk-forward test of game and player predictions (+ coach value, coach vs coach)
 walkforward:
