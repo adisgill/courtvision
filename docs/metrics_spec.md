@@ -1,12 +1,13 @@
 # Metrics spec
 
-**Status: v1.4.** v1.0 approved 2026-11-12 with every recommended decision
+**Status: v1.5.** v1.0 approved 2026-11-12 with every recommended decision
 (D1–D9); v1.1 (free throws, fouls valuation, role, per-possession impact, opponent
 adjustment, market model) approved the same day, see [section 11](#11-v11-2026-11-12);
 v1.2 (box-score prior for impact) also the same day, see [section 12](#12-v12-2026-11-12);
 v1.3 (contracts, market-comparables pricing, free agency, NBA.com advanced stats) and
 next-game forecasts in sections 13 and 14; v1.4 (coaching analytics, walk-forward
-prediction engine) in sections 15 and 16.
+prediction engine) in sections 15 and 16; v1.5 (play types, hexagon shot maps,
+scouting report) in sections 17 and 18.
 Implemented in `src/courtvision/metrics/` and `src/courtvision/market.py`;
 `uv run courtvision build` reproduces every number. Section 10 records what
 implementation added or settled beyond the draft; section 8 has the
@@ -22,7 +23,9 @@ Contents: [0 Decisions](#0-decisions) ·
 [12 v1.2](#12-v12-2026-11-12) · [13 v1.3](#13-v13-contracts-pricing-free-agency-nbacom-advanced-stats-2026-11-12) ·
 [14 Forecasts](#14-forecasts-for-each-teams-next-game-2026-11-12) ·
 [15 Coaching](#15-coaching-analytics-2026-11-12) ·
-[16 Walk-forward](#16-walk-forward-prediction-engine-2026-11-12)
+[16 Walk-forward](#16-walk-forward-prediction-engine-2026-11-12) ·
+[17 Play types](#17-play-types-2026-11-12) ·
+[18 Shot maps and scouting](#18-hexagon-shot-maps-and-the-scouting-report-2026-11-12)
 
 ---
 
@@ -1008,3 +1011,84 @@ on later seasons. Positional matchups and pace change player errors by less than
 they are kept because they cost nothing, but they aren't claimed to help. Minutes when he
 plays: error 5.5. A projection is conditional on playing: there is no injury feed, and
 26% of players expected from recent games didn't play.
+
+## 17. Play types (2026-11-12)
+
+Requested by the user: "deeper analysis on plays that teams are using". `courtvision plays`
+(`courtvision.plays` → schema `plays`), regular seasons 2015-16 on. No tracking data:
+each field-goal attempt is classified from what the play-by-play records about the shot
+(description, shot type, descriptor; the legacy text and the live format share one
+vocabulary) and how its possession started (`coach.possessions`). First match wins:
+
+| Play | Rule |
+|---|---|
+| Putback | putback, tip |
+| Transition | possession after a miss or steal, first action within 8 s |
+| Lob | alley-oop |
+| Cut | cutting layup or dunk |
+| Drive | driving layup, dunk, finger roll, reverse, hook |
+| Floater | floating jumper (driving or not) |
+| Post-up | hook, turnaround, fadeaway (not step-back) |
+| Step-back | step-back jumper |
+| Pull-up | pull-up jumper |
+| Other rim | any other layup or dunk (rolls, dump-offs, running layups) |
+| Spot-up three | any other three (98% of the made ones are assisted: catch-and-shoot) |
+| Two-point jumper | any other two-point jumper |
+
+Assists are recorded only on made shots, so they never classify a shot (a first draft that
+used them gave "catch-and-shoot" a 100% FG%; caught by the outcome check and removed).
+Tagging became more detailed over the years (two-point jumpers with no move recorded fall
+from 22% of shots in 2015-16 to 1.6% in 2025-26 while pull-ups rise from 6% to 12%), so
+every number is relative to its own season's league and teams are compared within a
+season. 2025-26 league mix: spot-up threes 28%, drives 14%, pull-ups 12%, transition 8%,
+floaters 8%, post-ups 7%, other rim 6%, step-backs 5%, putbacks 5%, cuts 4%, lobs 1%.
+
+Per team, season and side (offense; defense = what opponents did): share of shots, share
+against league, points per 100 shots against league on that play, assisted share of makes.
+Efficiency is shrunk with `k = n_half (1 - r) / r` shots, from each play's own split-half
+reliability (`plays.reliability`). Play mix is a team's fingerprint (split-half r 0.71 to
+0.99 on offense); efficiency is moderately reliable on drives (0.46), pull-ups (0.44),
+floaters (0.43) and post-ups (0.40), and mostly noise on cuts (0.13), lobs (0.14),
+step-backs (0.18) and transition (0.21); `k` ranges from about 290 to 5,000 shots.
+
+Also: per player (his mix and efficiency, shrunk with the team constants), passer →
+scorer connections by play (`plays.assists`), turnovers by kind (bad pass, lost ball,
+offensive foul, out of bounds, travel, shot clock) per 100 possessions against league.
+
+**Matchup test** (`plays.matchup_test`): each season's second-half team-games predicted
+from its first half. Against league average on that play, the offense's own shrunk number
+cuts the shot-weighted squared error by 0.58% and the offense plus the opponent defense's
+allowance by 0.91% (drives 2.3%, pull-ups 2.6%, other rim 1.6%). Single games are very
+noisy, so gains are small in absolute terms, but the defense adds information: the
+scouting report uses the sum.
+
+## 18. Hexagon shot maps and the scouting report (2026-11-12)
+
+Requested by the user: better-looking heat maps, and heat maps for upcoming games (danger
+zones, players to watch, plays to watch).
+
+**Shot maps** (Team and Player views; the five-zone court stays one click away):
+hexagons of radius 1.7 ft. Size: share of the unit's shots from there (full size at 1.6%).
+Color: points per 100 shots against league average *from the same hexagon* that season
+(so a corner three is compared with corner threes), shrunk toward the unit's own zone
+(60 shots of prior) and the zone toward league (150): `diff = 100 (Σ(pts − lg_pps) + 60 ·
+zone_diff) / (n + 60)`. For a defense, the sign flips: blue = opponents scored less.
+
+**Scouting report** (Upcoming, per game; this season plus last season's games at a quarter
+weight):
+
+* *Danger zones*: for each attacking team, per hexagon, its own shooting against league
+  plus what the defense allows there (`edge`); size = how often the attack shoots there.
+  Zone summary: the biggest edge and where the defense holds up best. Descriptive: the
+  hexagon-level sum isn't separately validated.
+* *Plays to watch*: per play, how often the attack uses it, its efficiency, the defense's
+  allowance and their sum (validated in section 17), sorted by edge × frequency.
+* *Players to watch*: expected points with the 80% range (section 16), form (points per
+  minute in the last 5 games against the 40 before, pulled toward his usual rate with 60
+  minutes of prior), matchup (his play mix against this defense's allowance per play) and
+  his go-to play. Form and matchup are descriptive; section 16 found matchup adjustments
+  add little to a player's expected line.
+
+Grid heat maps share one style (`charts.heat_grid`): each column scaled on its own, a wide
+gray band for "about average", blue good / red bad for the team or player looked at,
+values printed in every cell.
