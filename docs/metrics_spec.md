@@ -49,13 +49,28 @@ current season's ratings drift until it ends.
 |---|---|---|
 | `FGA` | field-goal attempts in rated zones (backcourt heaves, 0.01% of shots, excluded) | Shooting |
 | `PLAYS` | `FGA + 0.44·FTA + TOV` (TOV includes team turnovers at team level) | Ball control |
-| `POSS` | `FGA + 0.44·FTA − OREB + TOV`; game value = ½(team + opponent) | Defense, Presence |
+| `POSS` | tier A: **counted** from play-by-play (possession changes); box tiers: `FGA + 0.40·FTA − OREB + TOV` | Defense, Presence |
 
-`POSS` is the standard box-score estimate; it is validated against Kaggle's
-precomputed `possessions` (acceptance test T2). Ball control uses `PLAYS`
-instead because plays are attributable to individual players, which keeps the
-player → team roll-up exact; Defense uses `POSS` because it is measured
-against the opponent's possessions.
+**Possessions.** Kaggle's `possessions` (1996-97+) is an integer count, i.e.
+the NBA's official play-by-play count, not a formula. Tested against it
+(1996-97 → 2026-27, 71k team-games), the textbook estimate
+`FGA + 0.44·FTA − OREB + TOV` is off by 2.5 possessions per team-game on
+average. The best-fitting FT coefficient is 0.40 (0.39–0.41 in every era),
+which gets to 1.7; no box formula gets below ~1.6. So:
+
+* **Tier A (1996-97+)** counts possessions from play-by-play: a possession ends
+  on a made FG (except and-ones), the last FT of a trip, a defensive rebound,
+  a turnover, or period end. Counting events inside stints gives on-court
+  possessions on the same basis, so team and player numbers roll up exactly.
+  The live schema's `possession` column is a cross-check for 2019-20+.
+* **Box tiers** use `FGA + 0.40·FTA − OREB + TOV`, with the coefficient fitted
+  on 1996-97+ and documented as such.
+* Team turnovers (`turnoversTeam`) are NULL, not 0, in 5% of 1996+
+  team-games; treated as 0 and counted.
+
+Ball control uses `PLAYS` instead of `POSS` because plays are attributable to
+individual players, which keeps the player → team roll-up exact. Defense uses
+`POSS` because it is measured against the opponent's possessions.
 
 **Court zones** (from `x_legacy`, `y_legacy`: tenths of a foot, rim at the
 origin, +y toward half court). The 2-vs-3 split uses the recorded shot
@@ -418,7 +433,7 @@ Before any rating is trusted:
 | # | Test | Threshold | Status |
 |---|---|---|---|
 | T1 | Zone rule vs official `SHOT_ZONE_BASIC` | ≥ 99.9% | **99.992% on 2025-26.** To repeat on 1996-97 and 2005-06 (60 requests) to confirm older coordinates |
-| T2 | `POSS` vs Kaggle `possessions` (team-game) | MAE ≤ 1.5 | to do |
+| T2 | PBP-counted `POSS` vs Kaggle's official `possessions` (team-game, 1996-97+) | MAE ≤ 0.5 | to do. (Box formula already measured: MAE 2.5 with 0.44, 1.7 with 0.40, which is why tier A counts instead) |
 | T3 | Reconstructed stints vs `gamerotation` (2025-26) | ≥ 99% of player-games within 1 min; on-court five exact for ≥ 98% of events | to do |
 | T4 | Roll-up identities (§3) | exact to 1e-9 | unit tests |
 | T5 | Team-season ratings per season | mean 50 ± 0.5 | unit test |

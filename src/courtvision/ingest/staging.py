@@ -132,8 +132,9 @@ select
     assists                  as ast,
     steals                   as stl,
     blocks                   as blk,
-    turnovers                as tov,
+    turnovers                as tov,  -- player turnovers only; official TOV = tov + team_tov
     turnoversTeam            as team_tov,
+    turnoversTeam is null    as team_tov_missing,  -- all of 2021-22, half of 2000-01
     foulsPersonal            as pf,
     numMinutes               as minutes
 from kaggle.team_statistics

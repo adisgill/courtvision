@@ -200,6 +200,8 @@ per season.
 | Untracked stats stored as 0 | all box stats, by era | Availability measured by non-zero share; metrics gated by era (see spec) |
 | `PlayerStatistics.playerteamId` NULL | 99.9% of 2021-22, 50.2% of 2000-01, <1% of ~12 other seasons (109,299 rows) | Recovered from `home` flag + game's home/away ids (agree 100% where both exist); `stg.player_games.team_id_repaired`. 3,534 preseason/All-Star rows stay unrepaired (no game row) |
 | Team `turnovers` excludes team turnovers | all seasons | Official TOV = `turnovers + turnoversTeam` (verified 99.96% vs nba_api for 2025-26) |
+| `turnoversTeam` NULL | all of 2021-22, half of 2000-01 (3,652 team-games), the same games missing quarter scores | `stg.team_games.team_tov_missing`; tier A metrics count turnovers from PBP instead |
+| Kaggle `possessions` is an official integer count, not a formula | 1996-97+ | Box formula `FGA + 0.44·FTA − OREB + TOV` is off by 2.5/game; fitted 0.40 → 1.7 (see spec §1) |
 | Placeholder `teamId = 0` rows | 2 rows, games `0022500651`, `0022500652` (postponed from 2026-01-25) | Dropped in `stg.team_games` |
 | `isFieldGoal` NULL | 323 games, 2019-20 | `stg.shots` keys on `actionType` |
 | Padded `actionType` strings | ~4.8k legacy rows | `trim()` |
