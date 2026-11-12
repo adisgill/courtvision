@@ -193,7 +193,7 @@ def test_t6_shooting_by_hand(con, league_zones, game_id):
             con.execute(
                 """select measure, value from metrics.ratings_long
                    where level = 'team_game' and tier = 'A' and game_id = ? and team_id = ?
-                     and measure in ('shooting', 'shooting_sq', 'shooting_sm')""",
+                     and measure like 'shooting%'""",
                 [game_id, team],
             ).fetchall()
         )
@@ -201,7 +201,20 @@ def test_t6_shooting_by_hand(con, league_zones, game_id):
         # league rates are computed from slightly different shot sets: allow 0.3 pts.
         assert math.isclose(got["shooting_sq"], sq, abs_tol=0.3), (team, got, sq)
         assert math.isclose(got["shooting_sm"], sm, abs_tol=0.3), (team, got, sm)
-        assert math.isclose(got["shooting"], sq + sm, abs_tol=0.3)
+        # free throws (v1.1) from the official box score
+        lg_ftr, lg_ftpct, lg_pps_b = one(
+            con, "select lg_ftr_b, lg_ftpct_b, lg_pps_b from metrics.league_baselines "
+            "where season = 2025",
+        )  # fmt: skip
+        fga, fta, ftm = one(
+            con, "select FGA, FTA, FTM from nba_api.game_log where game_id = ? and team_id = ?",
+            [game_id, team],
+        )  # fmt: skip
+        fd = 100 * (fta - lg_ftr * fga) * (lg_ftpct - 0.5 * lg_pps_b) / fga
+        fm = 100 * (ftm - lg_ftpct * fta) / fga
+        assert math.isclose(got["shooting_fd"], fd, abs_tol=1e-6), (team, got, fd)
+        assert math.isclose(got["shooting_fm"], fm, abs_tol=1e-6), (team, got, fm)
+        assert math.isclose(got["shooting"], sq + sm + fd + fm, abs_tol=0.3)
 
 
 @pytest.mark.parametrize("game_id", GAMES)
@@ -231,10 +244,10 @@ def test_t6_defense_turnovers_and_fouls_by_hand(con, game_id):
     # official possession count (Kaggle team_statistics_extended).
     lg = one(
         con,
-        """select lg_tovr, lg_ppnt, lg_ftr, lg_ftpct from metrics.league_baselines
+        """select lg_tovr, lg_ppnt, lg_ftr, lg_ftpct, lg_pps from metrics.league_baselines
            where season = 2025""",
     )
-    lg_tovr, lg_ppnt, lg_ftr, lg_ftpct = lg
+    lg_tovr, lg_ppnt, lg_ftr, lg_ftpct, lg_pps = lg
     rows = con.execute(
         """select g.team_id, o.FGA, o.FTA, o.TOV, x.possessions
            from nba_api.game_log g
@@ -246,7 +259,8 @@ def test_t6_defense_turnovers_and_fouls_by_hand(con, game_id):
     ).fetchall()
     for team, ofga, ofta, otov, oposs in rows:
         dt = 100 * (otov / oposs - lg_tovr) * lg_ppnt
-        df = 100 * (lg_ftr * ofga - ofta) / oposs * lg_ftpct
+        # v1.1: each free throw allowed costs its make rate net of the shot it replaces
+        df = 100 * (lg_ftr * ofga - ofta) / oposs * (lg_ftpct - 0.5 * lg_pps)
         got = dict(
             con.execute(
                 """select measure, value from metrics.ratings_long where level = 'team_game'
@@ -304,7 +318,9 @@ def test_live_pipeline_reproduces_history(con):
         ).fetchall()
     )
     r = res["ratings"]
-    for m in ("shooting", "shooting_sq", "shooting_sm", "defense_dq", "defense_dm"):
+    # (the Shooting composite now includes free throws from box-score counts, which the
+    # live feed takes from the play-by-play, so only its field-goal parts are compared)
+    for m in ("shooting_sq", "shooting_sm", "defense_dq", "defense_dm"):
         for row in r[r.measure == m].itertuples():
             assert math.isclose(row.value, hist[(row.team_id, m)], abs_tol=1e-6), (m, row)
 

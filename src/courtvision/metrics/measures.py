@@ -17,8 +17,8 @@ from dataclasses import dataclass
 # Box-score inputs each tier needs (D9: a tier exists from the first season in which all
 # of its inputs are recorded in >= 95% of team-games). Tier A needs play-by-play instead.
 TIER_REQUIREMENTS = {
-    "shoot_C": ["fga"],
-    "shoot_B": ["fga", "fg3a"],
+    "shoot_C": ["fga", "fta"],
+    "shoot_B": ["fga", "fg3a", "fta"],
     "bt": ["fga", "fta", "tov"],
     "ball_B": ["fga", "fta", "tov", "oreb", "dreb"],
     "def_Bm": ["fga", "fta", "tov", "oreb", "dreb"],
@@ -69,13 +69,35 @@ def _xp_b(p: str = "b_") -> str:
     return f"(2 * ({p}fga - {p}fg3a) * L.lg_p2_b + 3 * {p}fg3a * L.lg_p3_b)"
 
 
+def ft_net(b: str = "") -> str:
+    """Net points of one extra free-throw attempt (spec v1.1, section 5.1).
+
+    A trip to the line mostly replaces a shot: a two-shot foul ends the possession
+    without the field-goal attempt that was fouled. So an FTA is worth its make rate
+    minus half a league shot (two FTA per replaced attempt). ``b`` = '' (play-by-play
+    constants) or '_b' (box-score constants). Validation against NBA.com's ratings put the
+    old full-value weighting at 0.27 of its points (docs/validation.md section 6).
+    """
+    return f"(L.lg_ftpct{b} - 0.5 * L.lg_pps{b})"
+
+
+def free_throws(p: str = "b_", den: str | None = None) -> dict[str, str]:
+    """Foul drawing (``fd``) and free-throw making (``fm``), per 100 of ``den``
+    (default: the unit's FGA). Box-score counts and constants, so every tier has them."""
+    den = den or f"{p}fga"
+    return {
+        "fd": f"100 * ({p}fta - L.lg_ftr_b * {p}fga) * {ft_net('_b')} / nullif({den}, 0)",
+        "fm": f"100 * ({p}ftm - L.lg_ftpct_b * {p}fta) / nullif({den}, 0)",
+    }
+
+
 def defense_a(p: str = "") -> dict[str, str]:
     """Tier A Defense components. ``p`` prefixes the team columns (used by Presence)."""
     return {
         "dq": f"100 * (L.lg_pps * {p}o_fga_r - {p}o_xp_r) / nullif({p}o_poss, 0)",
         "dm": f"100 * ({p}o_xp_r - {p}o_pts_r) / nullif({p}o_poss, 0)",
         "dt": f"100 * ({p}o_tov / nullif({p}o_poss, 0) - L.lg_tovr) * L.lg_ppnt",
-        "df": f"100 * (L.lg_ftr * {p}o_fga - {p}o_fta) / nullif({p}o_poss, 0) * L.lg_ftpct",
+        "df": f"100 * (L.lg_ftr * {p}o_fga - {p}o_fta) / nullif({p}o_poss, 0) * {ft_net()}",
         # Defensive rebounds above the league rate for the chances the unit had, per 100
         # opponent possessions, each worth a possession (lgPPP). Linear in counts, so it
         # rolls up exactly (section 10).
@@ -92,7 +114,7 @@ def _defense_b() -> dict[str, str]:
         "dm": f"100 * ({_xp_b('o_b_')} - (o_b_pts - o_b_ftm)) / nullif(o_b_poss, 0)",
         "dqm": "100 * (L.lg_pps_b * o_b_fga - (o_b_pts - o_b_ftm)) / nullif(o_b_poss, 0)",
         "dt": "100 * (o_b_tov / nullif(o_b_poss, 0) - L.lg_tovr_b) * L.lg_ppnt_b",
-        "df": "100 * (L.lg_ftr_b * o_b_fga - o_b_fta) / nullif(o_b_poss, 0) * L.lg_ftpct_b",
+        "df": f"100 * (L.lg_ftr_b * o_b_fga - o_b_fta) / nullif(o_b_poss, 0) * {ft_net('_b')}",
         "dr": (
             "100 * (b_dreb - L.lg_dreb_pct_b * (b_dreb + o_b_oreb))"
             " / nullif(o_b_poss, 0) * L.lg_ppp_b"
@@ -116,8 +138,10 @@ def court_parts(side: str) -> dict[str, str]:
     the team's and the five players on the floor sum to the team's value.
     """
     zone = "perim" if side == "bc" else "paint"
+    ft = free_throws(f"{side}_b_", "poss")
     parts = {
         "sh": f"100 * ({side}_pts_r - L.lg_pps * {side}_fga_r) / nullif(poss, 0)",
+        "ft": f"{ft['fd']} + {ft['fm']}",
         "bt": (
             f"100 * (L.lg_tovp * {side}_b_plays - {side}_b_tov) * L.lg_ppnt_b / nullif(poss, 0)"
         ),
@@ -129,9 +153,10 @@ def court_parts(side: str) -> dict[str, str]:
             f"100 * ({side}_b_stl - share * L.lg_{side}_stl * o_poss) * L.lg_ppnt"
             " / nullif(o_poss, 0)"
         ),
+        # a personal foul costs its free throws net of the shot they replace (ft_net)
         "df": (
             f"-100 * ({side}_b_pf - share * L.lg_{side}_pf * o_poss) * L.lg_ftpts_per_pf"
-            " / nullif(o_poss, 0)"
+            f" * {ft_net('_b')} / L.lg_ftpct_b / nullif(o_poss, 0)"
         ),
     }
     if side == "fc":
@@ -149,15 +174,10 @@ def build_measures() -> list[Measure]:
     def add(*args, **kw):
         m.append(Measure(*args, **kw))
 
-    # ---- Shooting (5.1) -------------------------------------------------------------
-    add(
-        "shooting",
-        "shooting",
-        "A",
-        "100 * (a_pts_r / nullif(a_fga_r, 0) - L.lg_pps)",
-        "a_fga_r",
-        "A",
-    )
+    # ---- Shooting (5.1): field goals by zone + free throws (v1.1) ---------------------
+    ft = free_throws()
+    fg_a = "100 * (a_pts_r / nullif(a_fga_r, 0) - L.lg_pps)"
+    add("shooting", "shooting", "A", total([fg_a, ft["fd"], ft["fm"]]), "a_fga_r", "A")
     add(
         "shooting_sq",
         "shooting",
@@ -175,7 +195,7 @@ def build_measures() -> list[Measure]:
         "A",
     )
     fg_b = "100 * ((b_pts - b_ftm) / nullif(b_fga, 0) - L.lg_pps_b)"
-    add("shooting", "shooting", "B", fg_b, "b_fga", "shoot_B")
+    add("shooting", "shooting", "B", total([fg_b, ft["fd"], ft["fm"]]), "b_fga", "shoot_B")
     add(
         "shooting_sq",
         "shooting",
@@ -192,7 +212,10 @@ def build_measures() -> list[Measure]:
         "b_fga",
         "shoot_B",
     )
-    add("shooting", "shooting", "C", fg_b, "b_fga", "shoot_C")
+    add("shooting", "shooting", "C", total([fg_b, ft["fd"], ft["fm"]]), "b_fga", "shoot_C")
+    for tier, start in (("A", "A"), ("B", "shoot_B"), ("C", "shoot_C")):
+        add("shooting_fd", "shooting", tier, ft["fd"], "b_fga", start)
+        add("shooting_fm", "shooting", tier, ft["fm"], "b_fga", start)
 
     # ---- Defense (5.2): A for teams and on-court for players (D7); box tiers teams only
     da = defense_a()
@@ -242,6 +265,8 @@ def build_measures() -> list[Measure]:
             add(f"{name}_{k}", name, "A", e, "poss", "A")
         box = (
             f"100 * (({side}_b_pts - {side}_b_ftm - L.lg_pps_b * {side}_b_fga)"
+            f" + ({side}_b_fta - L.lg_ftr_b * {side}_b_fga) * {ft_net('_b')}"
+            f" + ({side}_b_ftm - L.lg_ftpct_b * {side}_b_fta)"
             f" + (L.lg_tovp * {side}_b_plays - {side}_b_tov) * L.lg_ppnt_b)"
             " / nullif(bcfc_den_b, 0)"
         )
@@ -281,9 +306,13 @@ def presence_parts(p: str) -> dict[str, str]:
             + ([extra] if extra else [])
         )
 
+    # free throws on the play-by-play counts and constants (v1.1)
+    ft = f"({p}fta - L.lg_ftr * {p}fga) * {ft_net()} + ({p}ftm - L.lg_ftpct * {p}fta)"
     return {
-        "shooting": f"100 * ({p}pts_r / nullif({p}fga_r, 0) - L.lg_pps)",
-        "shooting_pp": f"100 * ({p}pts_r - L.lg_pps * {p}fga_r) / nullif({p}poss, 0)",
+        "shooting": (
+            f"100 * ({p}pts_r / nullif({p}fga_r, 0) - L.lg_pps) + 100 * ({ft}) / nullif({p}fga, 0)"
+        ),
+        "shooting_pp": f"100 * ({p}pts_r - L.lg_pps * {p}fga_r + {ft}) / nullif({p}poss, 0)",
         "defense": defense,
         "ball_control": total(
             [f"100 * (L.lg_tovp_pbp - {p}tov / nullif({plays}, 0)) * L.lg_ppnt", bo]

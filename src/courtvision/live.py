@@ -288,6 +288,8 @@ def team_counts(
             r["ftm"] += bool(ev.made)
             r["bc_fta"] += w_bc
             r["fc_fta"] += w_fc
+            r["bc_b_ftm"] += w_bc * bool(ev.made)
+            r["fc_b_ftm"] += w_fc * bool(ev.made)
         elif ev.etype == "tov":
             r["tov"] += 1
             r["bc_tov"] += w_bc
@@ -336,6 +338,9 @@ def team_counts(
             bc_b_plays=r.get("bc_fga", 0) + 0.4 * r.get("bc_fta", 0) + r.get("bc_tov", 0),
             fc_b_plays=r.get("fc_fga", 0) + 0.4 * r.get("fc_fta", 0) + r.get("fc_tov", 0),
             bc_b_tov=r.get("bc_tov", 0.0), fc_b_tov=r.get("fc_tov", 0.0),
+            bc_b_fga=r.get("bc_fga", 0.0), fc_b_fga=r.get("fc_fga", 0.0),
+            bc_b_fta=r.get("bc_fta", 0.0), fc_b_fta=r.get("fc_fta", 0.0),
+            bc_b_ftm=r.get("bc_b_ftm", 0.0), fc_b_ftm=r.get("fc_b_ftm", 0.0),
             bc_b_stl=r.get("bc_b_stl", 0.0), fc_b_stl=r.get("fc_b_stl", 0.0),
             bc_b_pf=r.get("bc_b_pf", 0.0), fc_b_pf=r.get("fc_b_pf", 0.0),
             share=1.0,
