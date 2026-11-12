@@ -539,7 +539,7 @@ player's own plays.
 
 **Ball control constant.** `lgTOVp` includes team turnovers, so team values
 average exactly zero. Player values, which have no team turnovers, average about
-+0.7. Player ratings are unaffected because each level has its own reference.
++0.6 (measured). Player ratings are unaffected because each level has its own reference.
 
 **Presence.** Ball control on/off uses play-by-play turnovers and plays, so on and
 off are measured the same way. Backcourt/Frontcourt on/off has:
