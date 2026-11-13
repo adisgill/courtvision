@@ -2,10 +2,22 @@
 
 from __future__ import annotations
 
+import gzip
+import os
+import shutil
+import threading
+import urllib.request
+from pathlib import Path
+
 import duckdb
 import pandas as pd
 
 from courtvision.config import get_paths
+
+# the demo database (`courtvision demo`, gzipped) as published on the repo's releases
+DEMO_URL = ("https://github.com/adisgill/courtvision/releases/download/demo-data/"
+            "courtvision.duckdb.gz")  # fmt: skip
+_DOWNLOAD = threading.Lock()  # sessions share one process: one download at a time
 
 HEADLINE = ["shooting", "defense", "ball_control", "backcourt", "frontcourt"]
 LABELS = {
@@ -58,8 +70,45 @@ def ordered(measures) -> list[str]:
     return sorted(measures, key=lambda m: rank.get(m, len(rank)))
 
 
+def db_path() -> Path:
+    """The full database if it's been built here, else the demo copy (``courtvision demo``)
+    from the release ``DEMO_URL`` points at: downloaded the first time, and again whenever
+    a newer one has been published (the hosted app has no data of its own)."""
+    full = get_paths().duckdb
+    if full.exists():
+        return full
+    demo = get_paths().data / "demo" / "courtvision.duckdb"
+    url = os.environ.get("COURTVISION_DEMO_URL", DEMO_URL)
+    with _DOWNLOAD:
+        mark = demo.with_name(demo.name + ".version")
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"),
+                                        timeout=15) as r:  # fmt: skip
+                version = r.headers.get("ETag") or r.headers.get("Last-Modified") or ""
+        except OSError:
+            version = None  # offline: keep the copy we have
+        current = mark.read_text() if mark.exists() else ""
+        if demo.exists() and (version is None or version == current):
+            return demo
+        demo.parent.mkdir(parents=True, exist_ok=True)
+        part = demo.with_name(demo.name + ".part")
+        with urllib.request.urlopen(url, timeout=60) as r, gzip.open(r) as z, \
+                open(part, "wb") as f:  # fmt: skip
+            shutil.copyfileobj(z, f, 2**20)
+        part.replace(demo)  # open connections keep reading the old file until they close
+        mark.write_text(version or "")
+    return demo
+
+
 def connect() -> duckdb.DuckDBPyConnection:
-    return duckdb.connect(str(get_paths().duckdb), read_only=True)
+    return duckdb.connect(str(db_path()), read_only=True)
+
+
+def demo_info(con) -> dict | None:
+    """When and from what the demo copy was built (None for the full database)."""
+    if not has_schema(con, "demo"):
+        return None
+    return q(con, "select * from demo.info").iloc[0].to_dict()
 
 
 def q(con: duckdb.DuckDBPyConnection, sql: str, params: list | None = None) -> pd.DataFrame:

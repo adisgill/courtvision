@@ -362,6 +362,22 @@ def plays_cmd() -> None:
     typer.echo(mt.round(3).to_string(index=False))
 
 
+@app.command("demo")
+def demo_cmd(
+    since: int = typer.Option(2025, help="First season (start year) with game-level rows."),
+    out: str = typer.Option("demo/courtvision.duckdb", help="Output file, under data/."),
+) -> None:
+    """Write the slim database the hosted demo app reads (play-level and game-level data
+    for recent seasons, season-level history whole) -> data/demo/courtvision.duckdb."""
+    import logging
+
+    from courtvision import demo
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    paths = get_paths()
+    typer.echo(demo.build(paths.duckdb, paths.data / out, since))
+
+
 @app.command("lineups")
 def lineups_cmd() -> None:
     """Lineups from the rebuilt stints (after `coaching`) -> lineups.* (five-man units with

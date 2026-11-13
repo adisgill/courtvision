@@ -30,7 +30,7 @@ def _w(df: pd.DataFrame, season: int) -> pd.DataFrame:
 # ---- danger zones ------------------------------------------------------------------------
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=3 * 3600)
 def _league_hex(_con, season: int) -> pd.DataFrame:
     return court.league_hex(D.league_shots(_con, season, "regular"))
 
@@ -90,7 +90,7 @@ def danger_zones(con, home: int, away: int, season: int, names: dict, mode: str)
 # ---- plays to watch ----------------------------------------------------------------------
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=3 * 3600)
 def _play_tables(_con, season: int) -> tuple[pd.DataFrame, dict]:
     lg = D.q(_con, "select season, play, share as lg_share, pps as lg_pps from plays.league "
              "where season in (?, ?)", [season - 1, season])  # fmt: skip

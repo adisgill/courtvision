@@ -34,22 +34,22 @@ def goto(view: str, clear: str | None = None, **keys) -> None:
     st.rerun()
 
 
-@st.cache_resource
+@st.cache_resource(ttl=3 * 3600)  # reconnecting picks up a newly published demo copy
 def _con():
     return D.connect()
 
 
-@st.cache_data
+@st.cache_data(ttl=3 * 3600)
 def _team_names():
     return D.team_names(_con())
 
 
-@st.cache_data
+@st.cache_data(ttl=3 * 3600)
 def _players():
     return D.player_names(_con())
 
 
-@st.cache_data
+@st.cache_data(ttl=3 * 3600)
 def _seasons():
     return D.seasons(_con())
 
@@ -132,7 +132,7 @@ def dimension_charts(r: pd.DataFrame, mode: str, key: str, adj: pd.DataFrame | N
         st.dataframe(rating_table(r, D.ordered(r.measure)), hide_index=True)
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=3 * 3600)
 def _league_hex(season: int, season_type: str) -> pd.DataFrame:
     return court.league_hex(D.league_shots(_con(), season, season_type))
 
@@ -803,4 +803,14 @@ st.sidebar.caption(
     "0-100 ratings: 50 = league average that season, 10 = one standard deviation. Blue "
     "helps, red hurts. Click teams and players in any chart to open them."
 )
+_demo = D.demo_info(_con())
+if _demo:
+    _built, _thru = pd.Timestamp(_demo["built_at"]), pd.Timestamp(_demo["data_through"])
+    st.sidebar.caption(
+        f"Demo data, built {_built:%b} {_built.day}, {_built.year}: games through "
+        f"{_thru:%b} {_thru.day}. Game-level detail and shot maps "
+        f"cover {season_label(int(_demo['since']))} on; season ratings go back to "
+        f"{season_label(int(_demo['first_season']))}. "
+        "[Source and full pipeline](https://github.com/adisgill/courtvision)"
+    )
 VIEWS[choice]()
