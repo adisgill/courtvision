@@ -593,6 +593,7 @@ def report(con) -> str:
         "",
         *walkforward_sections(con),
         *plays_section(con),
+        *lineups_section(con),
     ]
     return "\n".join(parts)
 
@@ -728,5 +729,33 @@ def plays_section(con) -> list[str]:
         "shrunk number and from offense plus the opponent defense's allowance (%).",
         "",
         _md_table(mt),
+        "",
+    ]
+
+
+def lineups_section(con) -> list[str]:
+    """Section 12: lineups (only once ``courtvision lineups`` has run)."""
+    if not _has_table(con, "lineups", "tests"):
+        return []
+    t = con.sql("select * from lineups.tests").df()
+    sh = t[t.test != "second half from first"][
+        ["test", "lineups", "n_half_poss", "synergy_r", "synergy_prev_r", "net_r", "k_poss"]
+    ]
+    fw = t[t.test == "second half from first"][["predictor", "lineups", "r", "mae"]]
+    return [
+        "## 12. Lineups",
+        "",
+        "Does a lineup's result beyond its players (synergy) repeat? Odd vs even games of a "
+        "season, lineups with 50+ possessions in each half. `synergy_r` uses this season's "
+        "player impacts (biased low: fitted on the same games), `synergy_prev_r` last "
+        "season's (biased high: they miss this season's player changes). `k_poss`: the "
+        "shrinkage that follows. Pairs: two players' net together relative to their team.",
+        "",
+        _md_table(sh),
+        "",
+        "Each season's second-half lineup net predicted from its first half (mean absolute "
+        "error per 100 possessions, weighted by second-half possessions):",
+        "",
+        _md_table(fw),
         "",
     ]
