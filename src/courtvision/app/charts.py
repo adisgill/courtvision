@@ -24,6 +24,18 @@ THEME = {
 RISK = {"low": "#0ca30c", "medium": "#fab219", "high": "#d03b3b"}
 
 
+def count_range(lo, hi):
+    """The whole numbers an 80% range covers, as (low, high): stats are counts, so a range
+    of 0.4-3.8 means 1 to 3, the set its coverage was calibrated and is scored on."""
+    lo, hi = np.asarray(lo, dtype=float), np.asarray(hi, dtype=float)
+    return np.maximum(np.ceil(lo - 1e-9), 0.0), np.floor(hi + 1e-9)
+
+
+def range_text(lo, hi) -> str:
+    a, b = count_range(lo, hi)
+    return f"{a:.0f}-{b:.0f}"
+
+
 def _rgb(h: str) -> tuple[int, int, int]:
     h = h.lstrip("#")
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)

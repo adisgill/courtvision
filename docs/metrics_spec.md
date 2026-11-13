@@ -1198,7 +1198,15 @@ whether the miss is inside the model's 80% band (±1.28 σ), and `after_tipoff` 
 prediction was made after the scheduled tip-off; forecasts read only completed games and
 the injury report, never the game in progress, so this flags timing, not leakage). Per
 player expected to play: each stat line against his box score, inside its 80% range or
-not (ranges rounded outward to whole numbers, since stats are counts), and the error of
+not, and the error of
 his season-to-date average as the baseline; players who didn't play are listed, not
 scored. One night is a handful of games: compare with the walk-forward averages (section
 16), not with zero.
+
+*Change, Nov 12 (first scored night):* "inside" is the exact range, as the walk-forward
+calibrated it. The first version rounded ranges outward to whole numbers (0.4-3.8 counted
+as 0 to 4), which scored 94% of the first night's lines inside instead of 86%; small
+counts (threes, steals + blocks, turnovers) have ranges about 2 wide, so a whole extra
+count at each end is a large share. Ranges in the app are shown as the whole numbers they
+cover (0.4-3.8 as "1-3"), so what is shown is what is scored. Scoring changed, not the
+predictions: the ledger is untouched.

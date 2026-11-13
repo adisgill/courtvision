@@ -108,6 +108,17 @@ def render(con, short_team, players: pd.DataFrame, mode: str, goto) -> None:
         "Hollow: predicted margin. Solid: final margin, blue when the predicted "
         "winner won, red when not. The gap is the miss."
     )
+    led = D.q(con, "select distinct game_id, home_team_id, away_team_id from "
+              "forecast.ledger_games where game_date::date = ?::date", [day])  # fmt: skip
+    wait = led[~led.game_id.isin(g.game_id)]
+    if len(wait):
+        st.caption(
+            "Not final when last scored: "
+            + ", ".join(f"{short_team(a, season)} @ {short_team(h, season)}"
+                        for a, h in zip(wait.away_team_id, wait.home_team_id, strict=True))
+            + f". Run `courtvision scorecard --date {pd.Timestamp(day):%Y-%m-%d}` again "
+            "once it ends."
+        )  # fmt: skip
 
     if not len(played):
         return
@@ -132,7 +143,7 @@ def render(con, short_team, players: pd.DataFrame, mode: str, goto) -> None:
                 error_x={"type": "data", "symmetric": False, "array": x.hi - x.pred,
                          "arrayminus": x.pred - x.lo, "color": C.rgba(color, 0.35),
                          "thickness": 1.5, "width": 0},
-                customdata=x[["player", "lo", "hi", "minutes"]].to_numpy(),
+                customdata=np.stack([x.player, *C.count_range(x.lo, x.hi), x.minutes], axis=1),
                 hovertemplate="%{customdata[0]}: predicted %{x:.1f} "
                 "(%{customdata[1]:.0f}-%{customdata[2]:.0f}), got %{y:.0f} in "
                 "%{customdata[3]:.0f} min<extra></extra>",
@@ -169,7 +180,7 @@ def render(con, short_team, players: pd.DataFrame, mode: str, goto) -> None:
     st.markdown(f"**Biggest misses** ({STATS[stat].lower()})")
     st.dataframe(pd.DataFrame({
         "player": miss.player, "predicted": miss.pred.round(1),
-        "range": [f"{lo:.0f}-{hi:.0f}" for lo, hi in zip(miss.lo, miss.hi, strict=True)],
+        "range": [C.range_text(lo, hi) for lo, hi in zip(miss.lo, miss.hi, strict=True)],
         "actual": miss.actual.astype(int), "minutes": miss.minutes.round(0),
         "expected minutes": miss.exp_minutes.round(0),
     }), hide_index=True)  # fmt: skip

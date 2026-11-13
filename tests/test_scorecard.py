@@ -40,7 +40,9 @@ def _db() -> duckdb.DuckDBPyConnection:
     lines = pd.DataFrame({"game_id": ["g1", "g1"], "team_id": [10, 10], "person_id": [1, 2],
                           "exp_minutes": [30.0, 12.0]})  # fmt: skip
     # (predicted, low, high) for player 1 and player 2
-    for s, (one, two) in {"pts": ((20, 12, 28), (6, 2, 10)), "reb": ((5, 2, 8), (2, 0, 4)),
+    # player 1's rebound range 1.6-4.6 covers 2 to 4; he gets 5, outside (rounding the range
+    # outward to 2-5 would wrongly count it)
+    for s, (one, two) in {"pts": ((20, 12, 28), (6, 2, 10)), "reb": ((4, 1.6, 4.6), (2, 0, 4)),
                           "ast": ((3, 1, 5), (1, 0, 2)), "fg3m": ((2, 0, 4), (0, 0, 1)),
                           "stocks": ((1, 0, 2), (0, 0, 1)),
                           "tov": ((2, 0, 4), (1, 0, 2))}.items():  # fmt: skip
@@ -79,4 +81,6 @@ def test_scorecard_games_and_players():
     assert bool(pts.loc[1, "played"]) and pts.loc[1, "actual"] == 25 and pts.loc[1, "inside"]
     assert not bool(pts.loc[2, "played"])  # expected, didn't play: not scored as a miss
     assert pts.loc[1, "season_avg"] == 15  # his average before the day
+    reb = p[(p.stat == "reb") & (p.person_id == 1)].iloc[0]
+    assert reb.actual == 5 and not reb.inside  # exact bounds, as calibrated
     assert res["inside_80"] == pytest.approx(p[p.played].inside.mean())

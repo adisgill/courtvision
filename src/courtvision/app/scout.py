@@ -223,8 +223,8 @@ def players_to_watch(con, gid: str, home: int, away: int, season: int, names: di
             "Go-to play": np.clip(d.go_to_rel / 15, -1, 1),
         }, index=d.index)  # fmt: skip
         text = pd.DataFrame({
-            "Points": [f"{p:.0f} ({lo:.0f}-{hi:.0f})" for p, lo, hi in zip(d.pts, d.lo, d.hi,
-                                                                          strict=True)],
+            "Points": [f"{p:.0f} ({C.range_text(lo, hi)})" for p, lo, hi in zip(d.pts, d.lo, d.hi,
+                                                                                strict=True)],
             "Form (last 5)": d.form.map(lambda v: "–" if pd.isna(v) else f"{v:+.0%}"),
             "Matchup": d.edge.map(lambda v: f"{v:+.1f}"),
             "Go-to play": [f"{p} {s:.0%}" if p else "–"

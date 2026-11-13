@@ -7,6 +7,7 @@ edge, and every expected player's predicted ratings and minutes.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -170,7 +171,8 @@ def _stat_lines(con, gid, home, away, season, short_team, players, mode) -> None
             error_x={"type": "data", "symmetric": False, "array": sub[f"{stat}_hi"] - sub[stat],
                      "arrayminus": sub[stat] - sub[f"{stat}_lo"], "color": C.rgba(color, 0.45),
                      "thickness": 6, "width": 0},
-            customdata=sub[[f"{stat}_lo", f"{stat}_hi", "exp_minutes"]].to_numpy(),
+            customdata=np.stack([*C.count_range(sub[f"{stat}_lo"], sub[f"{stat}_hi"]),
+                                 sub.exp_minutes], axis=1),
             hovertemplate="%{y}: %{x:.1f} (80%: %{customdata[0]:.0f}-%{customdata[1]:.0f}), "
             "%{customdata[2]:.0f} min<extra></extra>",
         ))  # fmt: skip

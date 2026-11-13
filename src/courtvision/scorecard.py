@@ -211,7 +211,9 @@ def score(con: duckdb.DuckDBPyConnection, day: str, source: str = "auto") -> dic
                              if s in base else np.nan})  # fmt: skip
         pl = pd.DataFrame(rows)
         pl["error"] = pl.pred - pl.actual
-        pl["inside"] = (pl.actual >= np.floor(pl.lo)) & (pl.actual <= np.ceil(pl.hi))
+        # the exact bounds, as the walk-forward calibrated them (stats are counts, so a range
+        # of 0.4-3.8 covers 1 to 3; the app shows it that way, never rounded outward)
+        pl["inside"] = (pl.actual >= pl.lo) & (pl.actual <= pl.hi)
         pl["avg_error"] = pl.season_avg - pl.actual
     keep = ["game_id", "game_date", "tipoff", "home_team_id", "away_team_id", "predicted_at",
             "after_tipoff", "data_through", "injury_report", "commit", "pred_margin",
