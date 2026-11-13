@@ -594,6 +594,7 @@ def report(con) -> str:
         *walkforward_sections(con),
         *plays_section(con),
         *lineups_section(con),
+        *availability_section(con),
     ]
     return "\n".join(parts)
 
@@ -757,5 +758,24 @@ def lineups_section(con) -> list[str]:
         "error per 100 possessions, weighted by second-half possessions):",
         "",
         _md_table(fw),
+        "",
+    ]
+
+
+def availability_section(con) -> list[str]:
+    """Section 13: what knowing who plays is worth (``walkforward --availability-test``)."""
+    if not _has_table(con, "forecast", "availability_test"):
+        return []
+    av = con.sql("select * from forecast.availability_test").df()
+    av["games"] = av.games.astype(int)
+    return [
+        "## 13. What knowing who plays is worth",
+        "",
+        "The chosen game model, re-run walk-forward with the roster view built from players "
+        "seen in one of the team's last three games (the live rule without an injury report) "
+        "and from the players who actually played each game (an oracle: the most any "
+        "injury report could add).",
+        "",
+        _md_table(av, ".4f"),
         "",
     ]

@@ -1,13 +1,13 @@
 # Metrics spec
 
-**Status: v1.6.** v1.0 approved 2026-11-12 with every recommended decision
+**Status: v1.7.** v1.0 approved 2026-11-12 with every recommended decision
 (D1–D9); v1.1 (free throws, fouls valuation, role, per-possession impact, opponent
 adjustment, market model) approved the same day, see [section 11](#11-v11-2026-11-12);
 v1.2 (box-score prior for impact) also the same day, see [section 12](#12-v12-2026-11-12);
 v1.3 (contracts, market-comparables pricing, free agency, NBA.com advanced stats) and
 next-game forecasts in sections 13 and 14; v1.4 (coaching analytics, walk-forward
 prediction engine) in sections 15 and 16; v1.5 (play types, hexagon shot maps,
-scouting report) in sections 17 and 18; v1.6 (lineups) in section 19.
+scouting report) in sections 17 and 18; v1.6 (lineups) in section 19; v1.7 (official injury report) in section 20.
 Implemented in `src/courtvision/metrics/` and `src/courtvision/market.py`;
 `uv run courtvision build` reproduces every number. Section 10 records what
 implementation added or settled beyond the draft; section 8 has the
@@ -26,7 +26,8 @@ Contents: [0 Decisions](#0-decisions) ·
 [16 Walk-forward](#16-walk-forward-prediction-engine-2026-11-12) ·
 [17 Play types](#17-play-types-2026-11-12) ·
 [18 Shot maps and scouting](#18-hexagon-shot-maps-and-the-scouting-report-2026-11-12) ·
-[19 Lineups](#19-lineups-2026-11-12)
+[19 Lineups](#19-lineups-2026-11-12) ·
+[20 Injury report](#20-the-official-injury-report-2026-11-12)
 
 ---
 
@@ -1136,3 +1137,42 @@ under 50 possessions together. For an upcoming game, from tonight's expected pla
 season, if all are expected tonight), its most-used available fives, the best possible
 five, and the opening fives' head-to-head by impacts. Descriptive: lineups for a specific
 game aren't predicted beyond who is expected to play.
+
+## 20. The official injury report (2026-11-12)
+
+Approved by the user ("Yes, injury feed"). `courtvision ingest injuries --fetch` reads the
+season's index page on official.nba.com and downloads the newest report PDF from
+ak-static.cms.nba.com (two requests; robots.txt allows both, crawl delay 1 s), cached
+under `data/raw/injuries/<date>/`. Plain `build` and `forecast` load the newest cached
+report and never fetch.
+
+**Reading the PDF without a library.** The report (GemBox; WinAnsi text) draws each table
+cell as a clipping rectangle followed by its words. `ingest.injuries.parse_pdf`
+decompresses each page's content stream (zlib), collects every word with the cell it was
+drawn in, joins a cell's words in reading order (a word ending in "-" joins the next
+line), orders pages by their "Page N of M" text, assigns cells to columns by the header
+cells' positions (pages without a header reuse the last page's), and carries date, time,
+matchup and team down to rows that leave them blank. Players are matched from "Last,
+First" (accents, punctuation and Jr./II/III ignored), preferring a player who has played
+for that team; 99% matched on the first report (the miss: a rookie with no games yet).
+Teams that haven't filed are kept as "not yet submitted".
+
+**In the forecast** (`forecast.availability`): for each upcoming game, the report's rows
+for that date; for a later date the report doesn't reach yet, only players listed Out are
+carried (`carried`; day-to-day statuses aren't); a report more than two days older than a
+game is ignored. Out and Doubtful players leave the expected minutes, and their minutes go
+to teammates in proportion to their own (the team total is unchanged), which moves the
+roster view, the margin, the stat lines and the lineups. Questionable and Probable players
+stay, tagged (Q) / (P) on their stat lines. Each absence's cost is shown: his expected
+minutes had he played times his impact.
+
+**What knowing who plays is worth** (`courtvision walkforward --availability-test` →
+`forecast.availability_test`, ~8 min): the chosen game model re-run walk-forward with the
+roster view built from the players who actually played each game (an oracle: the best any
+injury report could do) instead of the live rule (seen in one of the last three games).
+6,146 games: margin error 10.90 → 10.82, winners 65.8% → 66.5%, log loss 0.6153 → 0.6098 —
+about 2.5 times what rest and back-to-backs add, and most of it in games where a key player
+sits. The report recovers part of that ceiling: a player injured after his last game
+(today's report listed Stephen Curry, Lauri Markkanen and Scottie Barnes, all in the
+expected rotations) is now dropped. Historical reports aren't stored, so the report's own
+share of the gain can't be measured until reports accumulate.
