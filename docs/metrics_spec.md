@@ -1,13 +1,13 @@
 # Metrics spec
 
-**Status: v1.7.** v1.0 approved 2026-11-12 with every recommended decision
+**Status: v1.8.** v1.0 approved 2026-11-12 with every recommended decision
 (D1–D9); v1.1 (free throws, fouls valuation, role, per-possession impact, opponent
 adjustment, market model) approved the same day, see [section 11](#11-v11-2026-11-12);
 v1.2 (box-score prior for impact) also the same day, see [section 12](#12-v12-2026-11-12);
 v1.3 (contracts, market-comparables pricing, free agency, NBA.com advanced stats) and
 next-game forecasts in sections 13 and 14; v1.4 (coaching analytics, walk-forward
 prediction engine) in sections 15 and 16; v1.5 (play types, hexagon shot maps,
-scouting report) in sections 17 and 18; v1.6 (lineups) in section 19; v1.7 (official injury report) in section 20.
+scouting report) in sections 17 and 18; v1.6 (lineups) in section 19; v1.7 (official injury report) in section 20; v1.8 (prediction ledger, scorecard) in section 21.
 Implemented in `src/courtvision/metrics/` and `src/courtvision/market.py`;
 `uv run courtvision build` reproduces every number. Section 10 records what
 implementation added or settled beyond the draft; section 8 has the
@@ -27,7 +27,8 @@ Contents: [0 Decisions](#0-decisions) ·
 [17 Play types](#17-play-types-2026-11-12) ·
 [18 Shot maps and scouting](#18-hexagon-shot-maps-and-the-scouting-report-2026-11-12) ·
 [19 Lineups](#19-lineups-2026-11-12) ·
-[20 Injury report](#20-the-official-injury-report-2026-11-12)
+[20 Injury report](#20-the-official-injury-report-2026-11-12) ·
+[21 Scorecard](#21-prediction-ledger-and-scorecard-2026-11-12)
 
 ---
 
@@ -1176,3 +1177,28 @@ sits. The report recovers part of that ceiling: a player injured after his last 
 (today's report listed Stephen Curry, Lauri Markkanen and Scottie Barnes, all in the
 expected rotations) is now dropped. Historical reports aren't stored, so the report's own
 share of the gain can't be measured until reports accumulate.
+
+## 21. Prediction ledger and scorecard (2026-11-12)
+
+Requested by the user: see how the predictions fare once the games are played.
+
+**Ledger.** Every `courtvision forecast` run appends what it predicted to
+`forecast.ledger_games`, `ledger_players` and `ledger_availability`, stamped with the time,
+the last day of results it used (`data_through`), the injury report it used and the code
+version (git commit). Rows are only ever appended, so a prediction is scored exactly as it
+was made. The first entry (Nov 12, 2026) was copied from the forecast run at 8:26 PM ET,
+before the ledger existed; its note says so.
+
+**Scorecard.** `courtvision scorecard --date D` takes, for each of the day's games, the
+latest logged prediction and compares it with the result: from the database when the
+nightly Kaggle update has the game, otherwise from the NBA live feed's final box score
+(the source live mode uses; cached, one request per game at most every 10 s). Per game:
+predicted vs final margin, whether the predicted winner won, the win chance's Brier score,
+whether the miss is inside the model's 80% band (±1.28 σ), and `after_tipoff` (the
+prediction was made after the scheduled tip-off; forecasts read only completed games and
+the injury report, never the game in progress, so this flags timing, not leakage). Per
+player expected to play: each stat line against his box score, inside its 80% range or
+not (ranges rounded outward to whole numbers, since stats are counts), and the error of
+his season-to-date average as the baseline; players who didn't play are listed, not
+scored. One night is a handful of games: compare with the walk-forward averages (section
+16), not with zero.
