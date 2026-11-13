@@ -33,12 +33,15 @@ play-by-play) break down what every team runs and allows (drives, pull-ups, step
 cuts, lobs, post-ups, transition, putbacks, spot-up threes), how well, who runs each play,
 who passes to whom, and how teams turn it over. **Hexagon shot maps** show where a team or
 player shoots and how well against the league from the same spots, and every upcoming
-game gets a **scouting report**: danger zones, plays to watch, players to watch.
+game gets a **scouting report**: danger zones, plays to watch, players to watch, lineups.
+**Lineups** rank every five a team uses by what to expect from it (its players' impacts
+plus its own record, shrunk by how little lineup results repeat), find the best fives a
+team could play but hasn't, show which pairs work, and who closes games.
 
-> Status: **v1.5** for every season from 1974-75 (box-score tiers) and 1996-97
+> Status: **v1.6** for every season from 1974-75 (box-score tiers) and 1996-97
 > (play-by-play), with a validation report, a visualizer, a live mode, the market,
-> walk-forward-tested next-game forecasts, coaching analytics, play types and scouting
-> reports.
+> walk-forward-tested next-game forecasts, coaching analytics, play types, lineups and
+> scouting reports.
 >
 > * [`docs/metrics_spec.md`](docs/metrics_spec.md): formulas, scaling, roll-ups, tiers, acceptance tests
 > * [`docs/validation.md`](docs/validation.md): stabilization, persistence, signal beyond Four Factors
@@ -88,10 +91,11 @@ uv run courtvision market build                   # value, budgets, needs, optio
 uv run courtvision ingest coaches --fetch-current # coach of every game since 1996-97
 uv run courtvision coaching                       # coaching analytics (~1 min)
 uv run courtvision plays                          # play types, passing, turnovers (~1.5 min)
+uv run courtvision lineups                        # fives, pairs, best fives, closers (~30 s)
 uv run courtvision walkforward                    # test predictions on 5 seasons (~1 min)
 uv run courtvision forecast                       # each team's next game (seconds)
 uv run courtvision validate                       # regenerate docs/validation.md
-uv run courtvision app                            # league / upcoming / team / game / player / plays / coaches / market / live
+uv run courtvision app                            # league / upcoming / team / game / player / lineups / plays / coaches / market / live
 uv run courtvision live                           # today's games; --game-id X rates one
 ```
 
@@ -118,6 +122,7 @@ order by defense_rating desc;
 | `salary.*` | `book` (every contract by season, with options), `contract_summary` (status next summer), `contracts` (July snapshot, NBA ids), `cap`, `min_salaries`, ... | `ingest salaries` |
 | `market.*` | `players` (value, price, contract, risk), `teams` (budget, needs, next summer's space), `options`, `fa_class`, `fa_options`, `params` | `market build` |
 | `coach.*` | `assignments` (coach of every team-game), `possessions`, `timeouts`, `team_games`, `profiles` (per coach-season and career), `tempo`, `value` (margin vs expectation), `value_reliability` (which metrics are coaching), `h2h` (coach vs coach) | `ingest coaches`, `coaching`, `walkforward` |
+| `lineups.*` | `team_stints` (every stint with both fives and the players' expectation), `units` (five-man lineups: raw, expected, projected net, starts, clutch), `pairs`, `tests` (does lineup chemistry repeat; what predicts a lineup), `league` | `lineups` |
 | `plays.*` | `shots` (every attempt since 2015-16 with its play type), `league`, `team` (mix and efficiency, offense and defense), `player`, `assists` (passer → scorer), `turnovers` (by kind), `reliability`, `matchup_test` | `plays` |
 | `forecast.*` | `games` (margin, win chance, rest), `team` (predicted dimensions), `players` (predicted ratings), `player_lines` (stat lines with 80% ranges), `wf_*` (walk-forward predictions and evaluation), `margin_model`, `backtest_*` | `walkforward`, `forecast` |
 
@@ -132,11 +137,12 @@ src/courtvision/   library + CLI (`courtvision ...`)
   ingest/          Kaggle download/load, nba_api client + pull, staging views
   metrics/         play-by-play parser (possessions, lineups), counts, measures, ratings
   app/             Streamlit visualizer: league, upcoming (scouting report), team, game, player,
-                   plays, coaches, market, live; hexagon shot maps
+                   lineups, plays, coaches, market, live; hexagon shot maps
   live.py          live-game ratings from the NBA live feed
   market.py        player value, team budgets and needs, options and risk
   coaching.py      coaching analytics from play-by-play, coach value, coach vs coach
   plays.py         play types, passing connections, turnovers by kind
+  lineups.py       five-man units, pairs, projections, best possible fives
   walkforward.py   walk-forward prediction engine (games, player stat lines, ranges)
   forecast.py      each team's next game
   validation.py    generates docs/validation.md

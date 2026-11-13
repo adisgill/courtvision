@@ -1,13 +1,13 @@
 # Metrics spec
 
-**Status: v1.5.** v1.0 approved 2026-11-12 with every recommended decision
+**Status: v1.6.** v1.0 approved 2026-11-12 with every recommended decision
 (D1–D9); v1.1 (free throws, fouls valuation, role, per-possession impact, opponent
 adjustment, market model) approved the same day, see [section 11](#11-v11-2026-11-12);
 v1.2 (box-score prior for impact) also the same day, see [section 12](#12-v12-2026-11-12);
 v1.3 (contracts, market-comparables pricing, free agency, NBA.com advanced stats) and
 next-game forecasts in sections 13 and 14; v1.4 (coaching analytics, walk-forward
 prediction engine) in sections 15 and 16; v1.5 (play types, hexagon shot maps,
-scouting report) in sections 17 and 18.
+scouting report) in sections 17 and 18; v1.6 (lineups) in section 19.
 Implemented in `src/courtvision/metrics/` and `src/courtvision/market.py`;
 `uv run courtvision build` reproduces every number. Section 10 records what
 implementation added or settled beyond the draft; section 8 has the
@@ -25,7 +25,8 @@ Contents: [0 Decisions](#0-decisions) ·
 [15 Coaching](#15-coaching-analytics-2026-11-12) ·
 [16 Walk-forward](#16-walk-forward-prediction-engine-2026-11-12) ·
 [17 Play types](#17-play-types-2026-11-12) ·
-[18 Shot maps and scouting](#18-hexagon-shot-maps-and-the-scouting-report-2026-11-12)
+[18 Shot maps and scouting](#18-hexagon-shot-maps-and-the-scouting-report-2026-11-12) ·
+[19 Lineups](#19-lineups-2026-11-12)
 
 ---
 
@@ -1092,3 +1093,46 @@ weight):
 Grid heat maps share one style (`charts.heat_grid`): each column scaled on its own, a wide
 gray band for "about average", blue good / red bad for the team or player looked at,
 values printed in every cell.
+
+## 19. Lineups (2026-11-12)
+
+Requested by the user (the next gap after play types). `courtvision lineups`
+(`courtvision.lineups` → schema `lineups`), every regular season from 1996-97, from the
+rebuilt stints of games whose lineups check out (`metrics.game_pbp_qa.lineups_ok`).
+
+* `team_stints`: per stint and team, the five, points and possessions both ways, the five
+  faced, clutch possessions (from `coach.possessions`), and the expectation from the
+  players: own five's summed per-possession impact minus the opponents' five (this
+  season's impacts, and last season's for the tests). 2.2 million team-stints.
+* `units`: per team, season and five: minutes, possessions, offense / defense / net per 100
+  against league, the players' expectation, *synergy* (net − expectation), *projected net*
+  = expectation + synergy · poss / (poss + k), games started, clutch.
+* `pairs`: per team, season and two players (a = b: the player alone): possessions and net
+  together relative to the team's net, shrunk with the pairs' own k.
+
+**Is there lineup chemistry?** Synergy in odd vs even games of a season (7,170 lineups with
+50+ possessions in each half, ~150 per half): r = −0.05 against this season's impacts
+(biased low: they are fitted on the same stints) and +0.06 against last season's (biased
+high: they miss this season's player changes). Both near zero: a lineup is about the sum of
+its players. k = n_half (1 − r) / r from the upper bound = **2,354 possessions** (a lineup's
+own result counts half only after about a season and a half of a starting five's minutes).
+Raw lineup net repeats at r = 0.13.
+
+**What predicts a lineup's later games** (each season's second half from its first, 2,865
+lineups with 50+ possessions in both): league average misses by 10.4 points per 100; the
+lineup's own first-half net by **13.2** (worse than knowing nothing); its players' impacts
+from last season by 9.3 (r 0.25); the projection by **9.2** (r 0.27). Rank lineups by the
+projection, never by raw plus-minus.
+
+**Pairs:** net together relative to the team, odd vs even games, 33,057 pairs with 300+
+possessions per half: r = 0.16, k = 3,991 possessions.
+
+**Best possible fives** (`lineups.best_fives`): the five highest summed impacts among
+players still on the roster (in one of the team's last 15 games, 100+ minutes; never two
+players traded for each other), at least one guard, one or two centers; flagged *untried*
+under 50 possessions together. For an upcoming game, from tonight's expected players.
+
+**In the scouting report:** each team's likely starters (the five that started most this
+season, if all are expected tonight), its most-used available fives, the best possible
+five, and the opening fives' head-to-head by impacts. Descriptive: lineups for a specific
+game aren't predicted beyond who is expected to play.
