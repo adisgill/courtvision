@@ -299,6 +299,34 @@ def ingest_coaches(
     typer.echo(res)
 
 
+@ingest_app.command("injuries")
+def ingest_injuries(
+    fetch: bool = typer.Option(
+        False,
+        "--fetch",
+        help="Fetch the NBA's latest official injury report (two requests: the index page "
+        "and the PDF). Without it the newest cached report is loaded.",
+    ),
+) -> None:
+    """The NBA's official injury report -> injury.reports; `forecast` uses the newest one
+    (players ruled out leave the expected lineups and their minutes go to teammates)."""
+    import logging
+
+    from courtvision.db import connect
+    from courtvision.ingest import injuries
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    root = get_paths().data / "raw" / "injuries"
+    with connect() as con:
+        season = con.execute("select max(season) from stg.games where season_type = 'regular'"
+                             ).fetchall()[0][0]  # fmt: skip
+        path = injuries.fetch(root, season) if fetch else injuries.latest_cached(root)
+        if path is None:
+            typer.echo("no cached injury report: run with --fetch")
+            return
+        typer.echo(f"{path.name}: {injuries.load(con, path, season)}")
+
+
 @app.command("coaching")
 def coaching_cmd() -> None:
     """Coaching analytics from play-by-play -> coach.* (possessions, timeouts, profiles,
@@ -351,7 +379,14 @@ def lineups_cmd() -> None:
 
 
 @app.command("walkforward")
-def walkforward_cmd() -> None:
+def walkforward_cmd(
+    availability_test: bool = typer.Option(
+        False,
+        "--availability-test",
+        help="Also measure what knowing who plays is worth (re-runs the game model with "
+        "the players who actually played; ~8 min) -> forecast.availability_test.",
+    ),
+) -> None:
     """Walk-forward test of game and player predictions (2021-22 to 2025-26, weekly, only
     earlier data each week) -> forecast.wf_*; then coach value and coach vs coach."""
     import logging
@@ -360,6 +395,15 @@ def walkforward_cmd() -> None:
     from courtvision.db import connect
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    if availability_test:  # read-only while it runs, so the app stays usable
+        with connect(read_only=True) as con:
+            av = walkforward.availability_test(con)
+        with connect() as con:
+            con.register("tmp_df", av)
+            con.execute("create or replace table forecast.availability_test as "
+                        "select * from tmp_df")  # fmt: skip
+            con.unregister("tmp_df")
+        typer.echo(av.round(4).to_string(index=False))
     with connect() as con:
         res = walkforward.run(con)
         rel = coaching.value(con)["reliability"]
@@ -437,7 +481,7 @@ def build(
 ) -> None:
     """Rebuild everything from the raw caches: kaggle-load -> nba-api load -> metrics ->
     salaries -> market -> coaches -> coaching -> plays -> lineups -> walk-forward ->
-    forecast."""
+    injuries (cached) -> forecast."""
     from courtvision.db import connect
     from courtvision.ingest import nba_api_pull
 
@@ -460,10 +504,11 @@ def build(
         coaching_cmd()
         plays_cmd()
         lineups_cmd()
-        walkforward_cmd()
+        walkforward_cmd(availability_test=False)
     else:
         typer.echo("no coach cache: run `courtvision ingest coaches` for coaching and the "
                    "walk-forward model")  # fmt: skip
+    ingest_injuries(fetch=False)  # the newest cached report, if any; never fetches
     forecast_cmd()
 
 

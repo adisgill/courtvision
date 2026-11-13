@@ -425,16 +425,23 @@ def build(con: duckdb.DuckDBPyConnection) -> dict:
     g = bt["games"].dropna(subset=["blend_form"])
     best = g.loc[g.brier.idxmin()]
     res = predict(con, season, float(best.blend_form), float(best.sigma))
-    lines = pd.DataFrame()
+    lines, avail = pd.DataFrame(), pd.DataFrame()
     has_wf = con.execute("select count(*) from information_schema.tables where "
                          "table_schema = 'forecast' and table_name = 'margin_model'"
                          ).fetchall()[0][0]  # fmt: skip
     if has_wf and not res["games"].empty:
         # the walk-forward-tested model replaces the blend for margin and win chance (it
         # adds rest and back-to-backs), and adds each player's stat line with a range
+        from courtvision.ingest import injuries
         from courtvision.walkforward import live
 
-        wf = live(con, season, res["games"])
+        avail = injuries.for_games(con, res["games"])
+        out = set(avail[avail.status.isin(["Out", "Doubtful"])].person_id.dropna().astype(int))
+        wf = live(con, season, res["games"], out)
+        res["players"] = res["players"][~res["players"].person_id.isin(out)]
+        # what each absence costs: his expected minutes had he played, and his impact
+        mb = wf["minutes_before"][["person_id", "exp_minutes", "impact"]]
+        avail = avail.merge(mb, on="person_id", how="left")
         gm = res["games"].rename(columns={"pred_margin": "blend_margin",
                                           "home_win_prob": "blend_win_prob"})  # fmt: skip
         res["games"] = gm.merge(wf["games"].drop(columns=["pace"]), on="game_id", how="left")
@@ -442,8 +449,11 @@ def build(con: duckdb.DuckDBPyConnection) -> dict:
     con.execute("create schema if not exists forecast")
     for name, df in (("games", res["games"]), ("team", res["team"]),
                      ("players", res["players"]), ("backtest_team", bt["team"]),
-                     ("backtest_games", bt["games"]), ("player_lines", lines)):  # fmt: skip
-        if df.empty and name == "player_lines":
+                     ("backtest_games", bt["games"]), ("player_lines", lines),
+                     ("availability", avail)):  # fmt: skip
+        if df.empty and name in ("player_lines", "availability"):
+            if name == "availability":
+                con.execute("drop table if exists forecast.availability")
             continue
         con.register("tmp_df", df)
         con.execute(f"create or replace table forecast.{name} as select * from tmp_df")

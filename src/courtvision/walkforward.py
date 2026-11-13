@@ -151,10 +151,13 @@ def style_rates(teams: pd.DataFrame, before: pd.Timestamp, season: int) -> pd.Da
     return pd.DataFrame(out)
 
 
-def expected_minutes(players: pd.DataFrame, before: pd.Timestamp, season: int) -> pd.DataFrame:
+def expected_minutes(players: pd.DataFrame, before: pd.Timestamp, season: int,
+                     unavailable: set | None = None) -> pd.DataFrame:  # fmt: skip
     """Expected minutes per player for his team's next game, if he plays: his recent games
     weighted (half-life ``MINUTES_HALF_LIFE`` team games), for players in one of the
-    team's last three games; a team's total is scaled down only past 250."""
+    team's last three games; a team's total is scaled down only past 250. Players in
+    ``unavailable`` (ruled out on the injury report) are dropped and their minutes go to
+    their teammates in proportion to their own."""
     p = players[(players.season == season) & (players.game_date < before)]
     if p.empty:  # season opener: last season's final weeks
         p = players[(players.season == season - 1) & (players.game_date < before)]
@@ -177,6 +180,12 @@ def expected_minutes(players: pd.DataFrame, before: pd.Timestamp, season: int) -
     recent = full[full.rk <= 3].groupby(["person_id", "team_id"]).minutes.sum()
     out = (agg.wm / agg.w).rename("exp_minutes").reset_index()
     out = out[out.set_index(["person_id", "team_id"]).index.isin(recent[recent > 0].index)]
+    if unavailable:
+        before_total = out.groupby("team_id").exp_minutes.transform("sum")
+        keep = ~out.person_id.isin(unavailable)
+        after_total = out.exp_minutes.where(keep, 0).groupby(out.team_id).transform("sum")
+        out["exp_minutes"] = out.exp_minutes * before_total / after_total.where(after_total > 0, 1)
+        out = out[keep]
     # a returning player squeezes the others: scale down only past a full game
     tot = out.groupby("team_id").exp_minutes.transform("sum")
     out["exp_minutes"] = out.exp_minutes * np.minimum(1.0, 250 / tot.where(tot > 0, 1))
@@ -194,9 +203,21 @@ def stage1(data: dict, games: pd.DataFrame, cutoff: pd.Timestamp, season: int,
     pace_prev = hist[hist.season == season - 1].groupby("team_id").poss.mean()
     imp = data["impact"][data["impact"].season == season - 1].set_index("person_id").impact
     hca = data["impact"][data["impact"].season == season - 1].home_court.mean()
-    mins = expected_minutes(data["players"], cutoff, season)
+    mins = expected_minutes(data["players"], cutoff, season, data.get("unavailable"))
     mins["impact"] = mins.person_id.map(imp).fillna(data["newcomer"])
     roster = (mins.impact * mins.exp_minutes / 48).groupby(mins.team_id).sum()
+    played = data.get("oracle")  # availability test only: who actually played each game
+
+    def team_roster(game_id: str, team: int) -> float:
+        if played is None:
+            return float(roster.get(team, 0.0))
+        m = mins[mins.team_id == team]
+        k = m[m.person_id.isin(played.get((game_id, team), ()))]
+        if k.empty:
+            return float(roster.get(team, 0.0))
+        return float((k.impact * k.exp_minutes).sum() * m.exp_minutes.sum()
+                     / k.exp_minutes.sum() / 48)  # fmt: skip
+
     style = style_rates(t, cutoff, season)
     if "rest" not in data:
         data["rest"] = rest_days(data["games"])
@@ -220,7 +241,8 @@ def stage1(data: dict, games: pd.DataFrame, cutoff: pd.Timestamp, season: int,
             "game_id": g.game_id, "season": season, "game_date": g.game_date,
             "home_team_id": h, "away_team_id": a, "margin": g.margin, "pace": poss,
             "form": form * poss / 100,
-            "roster": (roster.get(h, 0.0) - roster.get(a, 0.0) + hca) * poss / 100,
+            "roster": (team_roster(g.game_id, h) - team_roster(g.game_id, a) + hca) * poss
+            / 100,
             "rest_h": rest.get((g.game_id, h), 3), "rest_a": rest.get((g.game_id, a), 3),
             "coach_h": ch, "coach_a": ca,
             "coach_diff": coach_resid.get(ch, 0.0) - coach_resid.get(ca, 0.0),
@@ -247,7 +269,7 @@ def player_lines(data: dict, games: pd.DataFrame, cutoff: pd.Timestamp, season: 
     p = data["players"]
     cur = p[(p.season == season) & (p.game_date < cutoff)]
     prev = p[p.season == season - 1]
-    mins = expected_minutes(p, cutoff, season)
+    mins = expected_minutes(p, cutoff, season, data.get("unavailable"))
     if mins.empty:
         return pd.DataFrame()
     base = prev if prev.minutes.sum() > 0 else cur
@@ -495,7 +517,8 @@ def schedule_rest(con, games: pd.DataFrame) -> pd.Series:
     return pd.Series(out)
 
 
-def live(con: duckdb.DuckDBPyConnection, season: int, games: pd.DataFrame) -> dict:
+def live(con: duckdb.DuckDBPyConnection, season: int, games: pd.DataFrame,
+         unavailable: set | None = None) -> dict:  # fmt: skip
     """The walk-forward model (``forecast.margin_model``) and player lines with calibrated
     80% ranges, for upcoming ``games`` (game_id, game_date, home/away team ids)."""
     mm = con.execute("select * from forecast.margin_model").df()
@@ -505,6 +528,7 @@ def live(con: duckdb.DuckDBPyConnection, season: int, games: pd.DataFrame) -> di
                   mm[mm.model == "player intervals"].beta, strict=True)}  # fmt: skip
     data = load(con, [season - 1, season])
     data["rest"] = schedule_rest(con, games)
+    data["unavailable"] = set(unavailable or ())
     data["coach_idx"] = pd.Series(dtype=object)
     g = games[["game_id", "game_date", "home_team_id", "away_team_id"]].copy()
     g["game_date"] = pd.to_datetime(g.game_date)
@@ -527,4 +551,47 @@ def live(con: duckdb.DuckDBPyConnection, season: int, games: pd.DataFrame) -> di
         pl = pl[keep]
     cols = ["game_id", "form", "roster", "pace", "rest_h", "rest_a", "b2b_h", "b2b_a",
             "rest_diff", "pred_margin", "home_win_prob", "model"]  # fmt: skip
-    return {"games": s1[cols], "players": pl, "sigma": sigma}
+    before = expected_minutes(data["players"], cutoff, season)  # ignoring the report
+    before["impact"] = before.person_id.map(
+        data["impact"][data["impact"].season == season - 1].set_index("person_id").impact
+    )
+    return {"games": s1[cols], "players": pl, "sigma": sigma, "minutes_before": before}
+
+
+def availability_test(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
+    """What knowing who plays is worth: the chosen game model re-run walk-forward with the
+    roster view built from (a) players seen in the team's last three games, as live, and
+    (b) the players who actually played each game (an oracle: the best any injury report
+    could do). Same stage-2 protocol (expanding window over earlier seasons)."""
+    seasons = list(range(WARMUP - 1, max(EVAL_SEASONS) + 1))
+    data = load(con, seasons)
+    pg = data["players"][data["players"].minutes > 0]
+    oracle = pg.groupby(["game_id", "team_id"]).person_id.agg(set).to_dict()
+    feats = FEATURES["+ rest"]
+    rows = []
+    for name, orc in (("last three games (live rule)", None), ("who actually played", oracle)):
+        data["oracle"] = orc
+        stage = []
+        for season in [WARMUP, *EVAL_SEASONS]:
+            sg = data["games"][data["games"].season == season]
+            cutoff, end = sg.game_date.min(), sg.game_date.max()
+            while cutoff <= end:
+                nxt = cutoff + pd.Timedelta(days=STEP_DAYS)
+                week = sg[(sg.game_date >= cutoff) & (sg.game_date < nxt)]
+                if not week.empty:
+                    stage.append(stage1(data, week, cutoff, season, pd.Series(dtype=float)))
+                cutoff = nxt
+        st = pd.concat(stage, ignore_index=True)
+        preds, test_rows = [], []
+        for season in EVAL_SEASONS:
+            m = fit_stage2(st[st.season < season], feats)
+            test = st[st.season == season]
+            preds.append(apply_stage2(m, test))
+            test_rows.append(test)
+        test = pd.concat(test_rows, ignore_index=True)
+        pred = np.concatenate(preds)
+        sigma = float(np.sqrt(np.mean((test.margin - pred) ** 2)))
+        rows.append({"roster_from": name, **score(test, pred, sigma)})
+        log.info("availability test: %s done", name)
+    data.pop("oracle", None)
+    return pd.DataFrame(rows)

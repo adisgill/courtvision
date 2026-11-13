@@ -29,3 +29,13 @@ def test_build_passes_every_option_explicitly():
                 assert isinstance(k.value, ast.Constant) and k.value.value is False
                 checked += 1
     assert checked == 2  # salaries and coaches
+    fetches = [
+        c
+        for c in ast.walk(build)
+        if isinstance(c, ast.Call)
+        and isinstance(c.func, ast.Name)
+        and c.func.id == "ingest_injuries"
+    ]
+    assert fetches and all(any(k.arg == "fetch" and isinstance(k.value, ast.Constant)
+                               and k.value.value is False for k in c.keywords)
+                           for c in fetches)  # fmt: skip
