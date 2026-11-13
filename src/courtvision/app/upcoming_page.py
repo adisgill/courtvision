@@ -89,6 +89,53 @@ def _coaches_line(con, home: int, away: int, season: int, short_team) -> None:
                f"({short_team(home, season)}){flag}.{rec} More in **Coaches**.")  # fmt: skip
 
 
+STATUS_ORDER = {"Out": 0, "Doubtful": 1, "Questionable": 2, "Probable": 3, "Available": 4}
+
+
+def _availability(con, gid, home, away, season, short_team) -> None:
+    """Who the official injury report lists for this game, and what each absence costs."""
+    if not _has_table(con, "forecast", "availability"):
+        st.caption("No injury report loaded: expected players are those in one of the team's "
+                   "last three games. `courtvision ingest injuries --fetch` adds the NBA's "
+                   "official report.")  # fmt: skip
+        return
+    a = D.q(con, "select * from forecast.availability where game_id = ?", [gid])
+    when = D.q(con, "select max(report_time) t from injury.reports").t.iloc[0]
+    st.markdown(f"**Availability** — NBA official injury report of "
+                f"{pd.to_datetime(when):%b %d, %I:%M %p} ET")  # fmt: skip
+    cols = st.columns(2)
+    for col, team in zip(cols, (away, home), strict=True):
+        r = a[a.team_id == team].copy()
+        with col:
+            st.markdown(f"*{short_team(team, season)}*")
+            if r.empty:
+                st.caption("Nobody listed.")
+                continue
+            if (r.status.fillna("") == "").all():
+                st.caption("Report not yet submitted for this team.")
+                continue
+            r = r[r.status.fillna("") != ""]
+            r["k"] = r.status.map(STATUS_ORDER).fillna(9)
+            r["cost"] = r.impact * r.exp_minutes / 48
+            lost = r[r.status.isin(["Out", "Doubtful"])].cost.sum()
+            lines = []
+            for x in r.sort_values(["k", "cost"], ascending=[True, False]).itertuples():
+                name = " ".join(reversed([v.strip() for v in str(x.player).split(",", 1)]))
+                extra = (
+                    f" · {x.exp_minutes:.0f} min, impact {x.impact:+.1f}"
+                    if pd.notna(x.exp_minutes) and pd.notna(x.impact)
+                    else ""
+                )
+                note = " (carried from an earlier game)" if x.carried else ""
+                reason = str(x.reason).replace("Injury/Illness - ", "")
+                lines.append(f"**{x.status}** {name}{extra} — {reason}{note}")
+            st.markdown("  \n".join(lines))
+            if lost:
+                st.caption(f"Ruled out (Out or Doubtful), these players were expected to add "
+                           f"{lost:+.1f} points per 100 possessions to the team. The forecast "
+                           "drops them and gives their minutes to teammates.")  # fmt: skip
+
+
 def _stat_lines(con, gid, home, away, season, short_team, players, mode) -> None:
     if not _has_table(con, "forecast", "player_lines"):
         return
@@ -96,6 +143,17 @@ def _stat_lines(con, gid, home, away, season, short_team, players, mode) -> None
     if pl.empty:
         return
     pl = pl.merge(players, on="person_id", how="left")
+    if _has_table(con, "forecast", "availability"):  # tag questionable / probable players
+        av = D.q(con, "select person_id, status from forecast.availability where game_id = ?",
+                 [gid]).dropna(subset=["person_id"])  # fmt: skip
+        tag = dict(
+            zip(
+                av.person_id.astype(int),
+                av.status.map({"Questionable": " (Q)", "Probable": " (P)", "Doubtful": " (D)"}),
+                strict=True,
+            )
+        )
+        pl["player"] = pl.player + pl.person_id.map(tag).fillna("")
     t = C.THEME[mode]
     st.subheader("Stat lines")
     stat = st.radio("Stat", list(STATS), format_func=STATS.get, horizontal=True,
@@ -282,6 +340,7 @@ def render(con, team_label, short_team, players: pd.DataFrame, mode: str, goto) 
                     help="Home net rating edge per 100 from team form and from the roster's "
                     "per-possession impact over expected minutes.")  # fmt: skip
     _coaches_line(con, home, away, season, short_team)
+    _availability(con, gid, home, away, season, short_team)
     from courtvision.app import scout
 
     names = {home: short_team(home, season), away: short_team(away, season)}
