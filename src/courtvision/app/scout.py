@@ -252,10 +252,90 @@ def players_to_watch(con, gid: str, home: int, away: int, season: int, names: di
 def scouting_report(con, gid: str, home: int, away: int, season: int, names: dict,
                     players: pd.DataFrame, mode: str, goto) -> None:  # fmt: skip
     st.subheader("Scouting report")
-    t1, t2, t3 = st.tabs(["Danger zones", "Plays to watch", "Players to watch"])
+    t1, t2, t3, t4 = st.tabs(["Danger zones", "Plays to watch", "Players to watch", "Lineups"])
     with t1:
         danger_zones(con, home, away, season, names, mode)
     with t2:
         plays_to_watch(con, home, away, season, names, mode)
     with t3:
         players_to_watch(con, gid, home, away, season, names, players, mode, goto)
+    with t4:
+        lineups_to_watch(con, gid, home, away, season, names, players, mode)
+
+
+# ---- lineups -----------------------------------------------------------------------------
+
+
+def _team_fives(con, gid: str, team: int, season: int, pnames: pd.Series) -> pd.DataFrame:
+    """Rows: likely starters, the most-used fives available tonight, the best possible
+    five; with projected net per 100 against an average five and possessions together."""
+    from courtvision import lineups as L
+    from courtvision.app.lineups_page import five_label, roster
+
+    avail = set(D.q(con, "select person_id from forecast.player_lines where game_id = ? "
+                    "and team_id = ? and exp_minutes >= 8", [gid, team]).person_id)  # fmt: skip
+    u = D.q(con, "select lineup, players, poss, starts, proj_net100 from lineups.units "
+            "where season = ? and team_id = ? order by poss desc", [season, team])  # fmt: skip
+    ok = u[u.players.map(lambda p: set(p) <= avail)] if avail else u
+    ro = roster(con, team, season)
+    imp = ro.set_index("person_id").impact
+    rows = []
+    starters = ok[ok.starts > 0].sort_values("starts", ascending=False)
+    if not starters.empty:
+        r = starters.iloc[0]
+        rows.append(("Likely starters", list(r.players), r.proj_net100, r.poss))
+    for r in ok.head(3).itertuples():
+        if rows and list(r.players) == rows[0][1]:
+            continue
+        rows.append(("Most used", list(r.players), r.proj_net100, r.poss))
+    cand = ro[ro.person_id.isin(avail)] if avail else ro[(ro.minutes >= 100) & ro.current]
+    best = L.best_fives(cand, n=1)
+    if best:
+        ids, val = best[0]
+        key = "-".join(str(i) for i in sorted(ids))
+        poss = u.set_index("lineup").poss.get(key, 0.0)
+        rows.append(("Best possible", ids, val, poss))
+    out = pd.DataFrame(rows, columns=["kind", "players", "proj", "poss"])
+    out["label"] = [f"{k}: {five_label(sorted(p, key=lambda i: -imp.get(i, 0.0)), pnames)}"
+                    for k, p in zip(out.kind, out.players, strict=True)]  # fmt: skip
+    out["impact_sum"] = out.players.map(lambda p: float(sum(imp.get(i, 0.0) for i in p)))
+    return out
+
+
+def lineups_to_watch(con, gid: str, home: int, away: int, season: int, names: dict,
+                     players: pd.DataFrame, mode: str) -> None:  # fmt: skip
+    if not D.has_schema(con, "lineups"):
+        st.info("Run `courtvision lineups` for lineups.")
+        return
+    pnames = players.set_index("person_id").player
+    fives = {}
+    cols = st.columns(2)
+    for col, team in zip(cols, (away, home), strict=True):
+        f = _team_fives(con, gid, team, season, pnames)
+        fives[team] = f
+        with col:
+            st.markdown(f"**{names[team]}**")
+            if f.empty:
+                st.info("No lineups yet.")
+                continue
+            idx = f.label
+            z = pd.DataFrame({"Projected net": np.clip(f.proj.to_numpy() / 10, -1, 1),
+                              "Together": 0.0}, index=idx)  # fmt: skip
+            text = pd.DataFrame({
+                "Projected net": [f"{v:+.1f}" for v in f.proj],
+                "Together": ["untried" if p < 50 else f"{p:.0f} poss" for p in f.poss],
+            }, index=idx)  # fmt: skip
+            st.plotly_chart(C.heat_grid(z, text, mode, row_px=34), width="stretch",
+                            key=f"lw_{team}")  # fmt: skip
+    a, h = fives.get(away), fives.get(home)
+    if a is not None and h is not None and not a.empty and not h.empty:
+        sa, shh = a.iloc[0], h.iloc[0]
+        edge = shh.impact_sum - sa.impact_sum
+        fav = names[home] if edge > 0 else names[away]
+        st.caption(
+            f"Opening fives head to head: by their players' impacts, **{fav}** by "
+            f"{abs(edge):.1f} points per 100 possessions while they share the floor. "
+            "Lineups shown only if all five are expected tonight (no injury feed: expected = "
+            "played in one of the team's last three games). Projected net: the players' "
+            "impacts plus the lineup's own record, shrunk (see Lineups)."
+        )
