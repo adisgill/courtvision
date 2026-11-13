@@ -1210,3 +1210,7 @@ counts (threes, steals + blocks, turnovers) have ranges about 2 wide, so a whole
 count at each end is a large share. Ranges in the app are shown as the whole numbers they
 cover (0.4-3.8 as "1-3"), so what is shown is what is scored. Scoring changed, not the
 predictions: the ledger is untouched.
+
+*Publication, Nov 12:* commit IDs changed when the history was rewritten before the
+repository went public (the author email only; every file is identical). Ledger rows
+logged before then name the old ID: `c5d00cd` is now `4033e51`.

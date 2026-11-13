@@ -1,5 +1,51 @@
 # courtvision
 
+**NBA analytics from public data:** era-adjusted 0–100 ratings, next-game forecasts tested
+walk-forward on 6,146 games, and an interactive app with scouting reports, lineups, play
+types, coaching analytics and a player market.
+
+![Scouting report: hexagon shot maps of where each team can hurt the other](docs/images/scouting.png)
+
+## Highlights
+
+- **Forecasts tested the honest way.** Every game of five seasons (2021-22 to 2025-26)
+  predicted a week at a time from earlier games only: **65.8% of winners** (home court
+  alone: 55.3%), Brier score 0.214, an average miss of 10.9 points on the margin, and win
+  chances within 4 points of the actual rate in every decile. Player stat lines carry 80%
+  ranges that held 79–80% of outcomes in seasons not used to set them.
+- **A prediction ledger and scorecard.** Every forecast is logged as it was made
+  (append-only, with the data, injury report and code version it used), and
+  `courtvision scorecard` grades it against the final box score.
+- **Ratings that agree with the NBA's own:** the parts add up to NBA.com's net rating
+  (r² 0.98, no fitting). Era-adjusted: every season is rated against its own league, from
+  1974-75 on. A player's per-possession impact predicts next season's team net rating
+  (r 0.77, against 0.38 for raw on/off).
+- **Metrics the NBA doesn't publish**, from play-by-play: play types (drives, cuts, lobs,
+  step-backs, transition...), hexagon shot maps against the league from the same spots,
+  lineup and pair projections, coaching (timeouts that stop runs, tempo control, plays out
+  of timeouts), availability from the official injury report, and a market with every
+  contract against the cap, tax and aprons.
+- **Negative results kept, not hidden:** lineup "chemistry" doesn't repeat (split-half
+  r ≈ 0), a lineup's own plus-minus predicts its future worse than assuming league
+  average, and coach-vs-coach history and positional matchups add nothing out of sample.
+  Each is in [`docs/validation.md`](docs/validation.md).
+- **Reproducible:** `courtvision build` rebuilds everything from the raw caches; 99 tests.
+
+**Stack:** Python 3.12 · DuckDB + Parquet · pandas · Streamlit + Plotly · uv · pytest · ruff
+
+<table>
+<tr>
+<td width="50%"><img src="docs/images/forecasts.png" alt="Next game for every team, and why the model expects each margin"></td>
+<td width="50%"><img src="docs/images/scorecard.png" alt="Scorecard: logged predictions against final results"></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/images/lineups.png" alt="Lineups: why raw plus-minus misleads, and the best fives a team could play"></td>
+<td width="50%"><img src="docs/images/league.png" alt="League: team map and the five team dimensions"></td>
+</tr>
+</table>
+
+## What's inside
+
 Rate and visualize NBA teams, games, and players on a common **0–100 scale**
 across six dimensions:
 

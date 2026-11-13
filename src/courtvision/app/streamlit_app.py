@@ -792,6 +792,11 @@ VIEWS = {"League": league_view, "Upcoming": upcoming_view, "Scorecard": scorecar
          "Plays": plays_view, "Coaches": coaches_view, "Market": market_view,
          "Live": live_view}  # fmt: skip
 
+# a link can open a view (?view=scorecard); read on a session's first run, then the sidebar rules
+_linked = {k.lower(): k for k in VIEWS}.get(str(st.query_params.get("view", "")).lower())
+if "view" not in st.session_state and _linked:
+    st.session_state["view"] = _linked
+
 st.sidebar.title("courtvision")
 choice = st.sidebar.radio("View", list(VIEWS), key="view")
 st.sidebar.caption(
