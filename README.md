@@ -4,6 +4,10 @@
 walk-forward on 6,146 games, and an interactive app with scouting reports, lineups, play
 types, coaching analytics and a player market.
 
+**[Open the live app →](https://courtvision-klw5iqxj3s66l2yngy75yg.streamlit.app/)**
+(demo data: full game-level detail for 2025-26 and this season, season ratings back to
+1974-75; if it's been idle, Streamlit takes about a minute to wake it.)
+
 ![Scouting report: hexagon shot maps of where each team can hurt the other](docs/images/scouting.png)
 
 ## Highlights
@@ -29,7 +33,7 @@ types, coaching analytics and a player market.
   r ≈ 0), a lineup's own plus-minus predicts its future worse than assuming league
   average, and coach-vs-coach history and positional matchups add nothing out of sample.
   Each is in [`docs/validation.md`](docs/validation.md).
-- **Reproducible:** `courtvision build` rebuilds everything from the raw caches; 99 tests.
+- **Reproducible:** `courtvision build` rebuilds everything from the raw caches; 102 tests.
 
 **Stack:** Python 3.12 · DuckDB + Parquet · pandas · Streamlit + Plotly · uv · pytest · ruff
 
@@ -149,9 +153,22 @@ uv run courtvision scorecard --date 2026-11-12    # how a day's predictions fare
 uv run courtvision validate                       # regenerate docs/validation.md
 uv run courtvision app                            # league / upcoming / scorecard / team / game / player / lineups / plays / coaches / market / live
 uv run courtvision live                           # today's games; --game-id X rates one
+uv run courtvision demo                           # slim copy for hosting (data/demo/, ~250 MB)
 ```
 
 `uv run courtvision build` reruns the whole chain from the raw caches.
+
+The [live app](https://courtvision-klw5iqxj3s66l2yngy75yg.streamlit.app/) runs the root
+`streamlit_app.py` on Streamlit Community Cloud. With no database of its own, it
+downloads the `courtvision demo` file from the repo's
+[`demo-data` release](https://github.com/adisgill/courtvision/releases/tag/demo-data), and
+picks up a newer one within 3 hours of it being uploaded:
+
+```bash
+uv run courtvision demo
+gzip -c data/demo/courtvision.duckdb > courtvision.duckdb.gz
+gh release upload demo-data courtvision.duckdb.gz --clobber
+```
 
 Then query `data/courtvision.duckdb` with any DuckDB client:
 
