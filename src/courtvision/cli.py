@@ -413,6 +413,40 @@ def walkforward_cmd(
     typer.echo(rel.round(3).to_string(index=False))
 
 
+@app.command("scorecard")
+def scorecard_cmd(
+    date: str = typer.Option(..., "--date", help="Game day to score, e.g. 2026-11-12."),
+    source: str = typer.Option(
+        "auto",
+        help="auto (database where it has the game, else the NBA live feed), db, or live.",
+    ),
+) -> None:
+    """Score a day's logged predictions against what happened -> forecast.scorecard_*."""
+    import logging
+
+    from courtvision import scorecard
+    from courtvision.db import connect
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    with connect() as con:
+        res = scorecard.score(con, date, source)
+        games = con.execute(
+            "select * from forecast.scorecard_games where day = ?::date", [date]).df()  # fmt: skip
+    for k, v in res.items():
+        typer.echo(f"{k:>20}: {v:.3f}" if isinstance(v, float) else f"{k:>20}: {v}")
+    if not games.empty:
+        cols = [
+            "game_id",
+            "pred_margin",
+            "actual_margin",
+            "error",
+            "winner_right",
+            "home_win_prob",
+            "after_tipoff",
+        ]
+        typer.echo(games[cols].round(2).to_string(index=False))
+
+
 @app.command("app")
 def run_app(port: int = typer.Option(8501, help="Port for the Streamlit server.")) -> None:
     """Open the visualizer (Streamlit): team, game, player and live views."""

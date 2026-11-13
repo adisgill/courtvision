@@ -458,6 +458,9 @@ def build(con: duckdb.DuckDBPyConnection) -> dict:
         con.register("tmp_df", df)
         con.execute(f"create or replace table forecast.{name} as select * from tmp_df")
         con.unregister("tmp_df")
+    from courtvision.scorecard import log_predictions
+
+    log_predictions(con)  # every run goes into the ledger, never rewritten
     log.info("forecast: %d upcoming games; backtest blend %.2f, sigma %.1f, margin MAE %.1f",
              len(res["games"]), best.blend_form, best.sigma, best.margin_mae)  # fmt: skip
     return {"blend": float(best.blend_form), "sigma": float(best.sigma),

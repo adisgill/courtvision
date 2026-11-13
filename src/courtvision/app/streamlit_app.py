@@ -1,9 +1,9 @@
 """courtvision visualizer: ``uv run courtvision app``.
 
-League, upcoming, team, game, player, lineups, plays, coaches, market and live views.
-Every chart is interactive: hover for numbers, and click a team or a player to open its
-page. Read-only
-over ``data/courtvision.duckdb``; run ``courtvision build`` first.
+League, upcoming, scorecard, team, game, player, lineups, plays, coaches, market and
+live views. Every chart is interactive: hover for numbers, and click a team or a player
+to open its page. Read-only over ``data/courtvision.duckdb``; run ``courtvision build``
+first.
 """
 
 from __future__ import annotations
@@ -768,6 +768,12 @@ def coaches_view() -> None:
     coaches_page.render(_con(), team_label, _theme(), goto)
 
 
+def scorecard_view() -> None:
+    from courtvision.app import scorecard_page
+
+    scorecard_page.render(_con(), short_team, _players(), _theme(), goto)
+
+
 def lineups_view() -> None:
     from courtvision.app import lineups_page
 
@@ -780,7 +786,8 @@ def plays_view() -> None:
     plays_page.render(_con(), team_label, _players(), _theme(), goto)
 
 
-VIEWS = {"League": league_view, "Upcoming": upcoming_view, "Team": team_view,
+VIEWS = {"League": league_view, "Upcoming": upcoming_view, "Scorecard": scorecard_view,
+         "Team": team_view,
          "Game": game_view, "Player": player_view, "Lineups": lineups_view,
          "Plays": plays_view, "Coaches": coaches_view, "Market": market_view,
          "Live": live_view}  # fmt: skip
