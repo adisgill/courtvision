@@ -4,7 +4,7 @@
 walk-forward on 6,146 games, and an interactive app with scouting reports, lineups, play
 types, coaching analytics and a player market.
 
-**[Open the live app →](https://courtvision-klw5iqxj3s66l2yngy75yg.streamlit.app/)**
+**[Open the live app →](https://courtvis.streamlit.app/)**
 (demo data: full game-level detail for 2025-26 and this season, season ratings back to
 1974-75; if it's been idle, Streamlit takes about a minute to wake it.)
 
@@ -158,7 +158,7 @@ uv run courtvision demo                           # slim copy for hosting (data/
 
 `uv run courtvision build` reruns the whole chain from the raw caches.
 
-The [live app](https://courtvision-klw5iqxj3s66l2yngy75yg.streamlit.app/) runs the root
+The [live app](https://courtvis.streamlit.app/) runs the root
 `streamlit_app.py` on Streamlit Community Cloud. With no database of its own, it
 downloads the `courtvision demo` file from the repo's
 [`demo-data` release](https://github.com/adisgill/courtvision/releases/tag/demo-data), and
