@@ -57,7 +57,10 @@ def _con():
 
 @st.cache_data(ttl=600, show_spinner=False)
 def _published() -> str | None:
-    return D.published_version()
+    version = D.published_version()
+    if version is not None or D.loaded_version() is not None:  # the hosted demo: say so
+        print(f"demo copy check: published {version}, have {D.loaded_version()}", flush=True)
+    return version
 
 
 def _pick_up_new_data() -> None:
@@ -849,7 +852,8 @@ _demo = D.demo_info(_con())
 if _demo:
     _built, _thru = pd.Timestamp(_demo["built_at"]), pd.Timestamp(_demo["data_through"])
     st.sidebar.caption(
-        f"Demo data, built {_built:%b} {_built.day}, {_built.year}: games through "
+        f"Demo data, built {_built:%b} {_built.day}, {_built:%I:%M %p}".replace(" 0", " ")
+        + " ET: games through "
         f"{_thru:%b} {_thru.day}. Game-level detail and shot maps "
         f"cover {season_label(int(_demo['since']))} on; season ratings go back to "
         f"{season_label(int(_demo['first_season']))}. "
