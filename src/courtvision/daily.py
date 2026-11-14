@@ -195,7 +195,9 @@ def run(dry_run: bool = False) -> dict:
         log.info("stopped: interrupted (Ctrl+C or its console window closed)")
         raise
     if not done["rebuilt"] and not dry_run:
-        log.info("no rebuild today: Kaggle's update didn't arrive (or download) in time")
+        log.info("no rebuild in this run: no Kaggle update newer than the copy downloaded "
+                 "%s arrived (or downloaded) in time",
+                 kaggle_download.downloaded_at(paths.kaggle_raw))  # fmt: skip
     log.info("done: %s", done)
     return done
 
