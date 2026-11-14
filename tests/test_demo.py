@@ -67,9 +67,9 @@ def test_app_downloads_the_demo_once_and_again_when_republished(tmp_path, monkey
     monkeypatch.setenv("COURTVISION_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("COURTVISION_DEMO_URL", payload.as_uri())
     p = D.db_path()
-    assert p == tmp_path / "data" / "demo" / "courtvision.duckdb" and p.read_bytes() == b"first"
+    assert p.parent == tmp_path / "data" / "demo" and p.read_bytes() == b"first"
     p.write_bytes(b"local")  # unchanged upstream: the local copy is kept
-    assert D.db_path().read_bytes() == b"local"
+    assert D.db_path() == p and p.read_bytes() == b"local"
     # what the running app checks every 10 minutes: the published copy vs the one it has
     assert D.published_version() == D.loaded_version() is not None
     payload.write_bytes(gzip.compress(b"second"))
@@ -77,6 +77,30 @@ def test_app_downloads_the_demo_once_and_again_when_republished(tmp_path, monkey
     assert D.published_version() not in (None, D.loaded_version())
     assert D.db_path().read_bytes() == b"second"
     assert D.published_version() == D.loaded_version()
+    assert not p.exists()  # the old copy is gone
+
+
+def test_a_republished_copy_is_read_while_the_old_one_is_still_open(tmp_path, monkeypatch):
+    """DuckDB hands back a database already open in the process for the same path, so a new
+    copy must not reuse the old one's file name (the live app kept showing old data)."""
+
+    def publish(n: int) -> None:
+        db = tmp_path / f"build{n}.duckdb"
+        with duckdb.connect(str(db)) as c:
+            c.execute(f"create table t as select {n} v")
+        payload.write_bytes(gzip.compress(db.read_bytes()))
+        os.utime(payload, (1_900_000_000 + n, 1_900_000_000 + n))
+
+    payload = tmp_path / "pub" / "courtvision.duckdb.gz"
+    payload.parent.mkdir()
+    monkeypatch.setenv("COURTVISION_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("COURTVISION_DEMO_URL", payload.as_uri())
+    publish(1)
+    old = D.connect()
+    assert old.execute("select v from t").fetchall() == [(1,)]
+    publish(2)
+    assert D.connect().execute("select v from t").fetchall() == [(2,)]
+    old.close()
 
 
 def test_app_prefers_the_full_database(tmp_path, monkeypatch):

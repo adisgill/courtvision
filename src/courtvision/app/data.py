@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import gzip
+import hashlib
 import logging
 import os
 import shutil
@@ -80,34 +82,48 @@ def db_path() -> Path:
     full = get_paths().duckdb
     if full.exists():
         return full
-    demo, mark = _demo_files()
     url = os.environ.get("COURTVISION_DEMO_URL", DEMO_URL)
     with _DOWNLOAD:
         version = _remote_version(url)  # None offline: keep the copy we have
-        current = mark.read_text() if mark.exists() else ""
-        if demo.exists() and (version is None or version == current):
-            return demo
+        current = loaded_version()
+        if current is not None and (version is None or version == current):
+            return _copy(current)
         log.warning("downloading the demo copy %s (had %s)", version, current or "none")
-        demo.parent.mkdir(parents=True, exist_ok=True)
-        part = demo.with_name(demo.name + ".part")
+        new = _copy(version or "")
+        new.parent.mkdir(parents=True, exist_ok=True)
+        part = new.with_name(new.name + ".part")
         with urllib.request.urlopen(url, timeout=60) as r, gzip.open(r) as z, \
                 open(part, "wb") as f:  # fmt: skip
             shutil.copyfileobj(z, f, 2**20)
-        part.replace(demo)  # open connections keep reading the old file until they close
-        mark.write_text(version or "")
-    return demo
+        part.replace(new)
+        _version_file().write_text(version or "")
+        for old in new.parent.glob("courtvision-*.duckdb"):
+            if old != new:
+                # open connections keep reading it until they close (Linux); Windows won't
+                # delete a file in use, so that waits for the next download
+                with contextlib.suppress(OSError):
+                    old.unlink(missing_ok=True)
+    return new
 
 
-def _demo_files() -> tuple[Path, Path]:
-    """The downloaded demo copy, and the file recording which published version it is."""
-    demo = get_paths().data / "demo" / "courtvision.duckdb"
-    return demo, demo.with_name(demo.name + ".version")
+def _version_file() -> Path:
+    """Records which published version the downloaded demo copy is."""
+    return get_paths().data / "demo" / "courtvision.version"
+
+
+def _copy(version: str) -> Path:
+    """Where a published version is kept. Each gets its own file name: DuckDB reuses a
+    database already open in the process for a path it's asked to connect to, so a new
+    copy at the old path would go unread."""
+    tag = hashlib.sha1(version.encode()).hexdigest()[:12]
+    return get_paths().data / "demo" / f"courtvision-{tag}.duckdb"
 
 
 def loaded_version() -> str | None:
     """Version of the demo copy downloaded here (None if there isn't one)."""
-    demo, mark = _demo_files()
-    return mark.read_text() if demo.exists() and mark.exists() else None
+    mark = _version_file()
+    version = mark.read_text() if mark.exists() else None
+    return version if version is not None and _copy(version).exists() else None
 
 
 def _remote_version(url: str) -> str | None:
