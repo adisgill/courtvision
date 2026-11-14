@@ -33,7 +33,7 @@ types, coaching analytics and a player market.
   r ≈ 0), a lineup's own plus-minus predicts its future worse than assuming league
   average, and coach-vs-coach history and positional matchups add nothing out of sample.
   Each is in [`docs/validation.md`](docs/validation.md).
-- **Reproducible:** `courtvision build` rebuilds everything from the raw caches; 104 tests.
+- **Reproducible:** `courtvision build` rebuilds everything from the raw caches; 109 tests.
 
 **Stack:** Python 3.12 · DuckDB + Parquet · pandas · Streamlit + Plotly · uv · pytest · ruff
 
@@ -157,6 +157,7 @@ uv run courtvision validate                       # regenerate docs/validation.m
 uv run courtvision app                            # league / upcoming / scorecard / team / game / player / lineups / plays / coaches / market / live
 uv run courtvision live                           # today's games; --game-id X rates one
 uv run courtvision demo                           # slim copy for hosting (data/demo/, ~250 MB)
+uv run courtvision daily                          # the whole day unattended (below); --dry-run shows the plan
 ```
 
 `uv run courtvision build` reruns the whole chain from the raw caches.
@@ -165,12 +166,24 @@ The [live app](https://courtvis.streamlit.app/) runs the root
 `streamlit_app.py` on Streamlit Community Cloud. With no database of its own, it
 downloads the `courtvision demo` file from the repo's
 [`demo-data` release](https://github.com/adisgill/courtvision/releases/tag/demo-data), and
-picks up a newer one within 3 hours of it being uploaded:
+picks up a newer one within 3 hours of it being uploaded
+(`uv run courtvision demo --publish` builds and uploads it, with the GitHub CLI).
 
-```bash
-uv run courtvision demo
-gzip -c data/demo/courtvision.duckdb > courtvision.duckdb.gz
-gh release upload demo-data courtvision.duckdb.gz --clobber
+**Every day, unattended.** `courtvision daily` scores the past week's unscored days,
+forecasts 40 minutes before the day's first tip-off with the latest injury report,
+rebuilds once Kaggle's nightly update lands (then re-forecasts the games still to come),
+and publishes the demo after each step, logging to `data/logs/`. A forecast never
+predicts a game that has started. To run it every morning on Windows (the machine's clock
+must be US Eastern, like the schedule; it needs the computer on and signed in, and the
+local app closed while it writes):
+
+```powershell
+$repo = "C:\path\to\courtvision"
+Register-ScheduledTask -TaskName "courtvision daily" `
+  -Action (New-ScheduledTaskAction -Execute "$repo\.venv\Scripts\pythonw.exe" -Argument "-m courtvision daily" -WorkingDirectory $repo) `
+  -Trigger (New-ScheduledTaskTrigger -Daily -At 9:00AM) `
+  -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 16) -MultipleInstances IgnoreNew)
+# Unregister-ScheduledTask -TaskName "courtvision daily" to stop it
 ```
 
 Then query `data/courtvision.duckdb` with any DuckDB client:

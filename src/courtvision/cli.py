@@ -366,9 +366,13 @@ def plays_cmd() -> None:
 def demo_cmd(
     since: int = typer.Option(2025, help="First season (start year) with game-level rows."),
     out: str = typer.Option("demo/courtvision.duckdb", help="Output file, under data/."),
+    publish: bool = typer.Option(
+        False, "--publish", help="Then upload it to the repo's demo-data release (needs `gh`)."
+    ),
 ) -> None:
     """Write the slim database the hosted demo app reads (play-level and game-level data
-    for recent seasons, season-level history whole) -> data/demo/courtvision.duckdb."""
+    for recent seasons, season-level history whole) -> data/demo/courtvision.duckdb;
+    ``--publish`` replaces the copy the live app downloads."""
     import logging
 
     from courtvision import demo
@@ -376,6 +380,23 @@ def demo_cmd(
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     paths = get_paths()
     typer.echo(demo.build(paths.duckdb, paths.data / out, since))
+    if publish:
+        typer.echo(f"published {demo.publish(paths.data / out)}")
+
+
+@app.command("daily")
+def daily_cmd(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show today's plan; run nothing."),
+) -> None:
+    """The daily run for a scheduled task: score the past week's unscored days, refresh the
+    data when Kaggle publishes, forecast before the first tip-off, publish the demo. Logs to
+    data/logs/daily-<date>.log."""
+    from datetime import date
+
+    from courtvision import daily
+
+    daily.log_to(get_paths().data / "logs" / f"daily-{date.today()}.log")
+    daily.run(dry_run=dry_run)
 
 
 @app.command("lineups")

@@ -32,6 +32,24 @@ def _api():
     return api
 
 
+def last_updated() -> datetime | None:
+    """When the dataset was last published on Kaggle (UTC, naive), or None if not found."""
+    owner, slug = KAGGLE_DATASET.split("/")
+    for d in _api().dataset_list(user=owner, search=slug):
+        if str(d.ref) == KAGGLE_DATASET:
+            return getattr(d, "last_updated", None)
+    return None
+
+
+def downloaded_at(dest: Path) -> datetime | None:
+    """When the copy in ``dest`` was downloaded (UTC, naive), from its manifest."""
+    path = dest / MANIFEST
+    if not path.exists():
+        return None
+    ts = json.loads(path.read_text(encoding="utf-8")).get("downloaded_at_utc")
+    return datetime.fromisoformat(ts).replace(tzinfo=None) if ts else None
+
+
 def download(dest: Path, *, version: int | None = None, force: bool = False) -> dict:
     """Download and unzip every file in the dataset into ``dest``.
 

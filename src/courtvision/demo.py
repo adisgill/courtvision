@@ -10,14 +10,20 @@ tables, so the demo file stands alone.
 
 from __future__ import annotations
 
+import gzip
 import logging
+import shutil
+import subprocess
 from pathlib import Path
 
 import duckdb
 
+from courtvision.config import REPO_ROOT
 from courtvision.db import MACROS
 
 log = logging.getLogger(__name__)
+
+RELEASE_TAG = "demo-data"  # the release the app downloads from (app/data.py DEMO_URL)
 
 # tables only the pipeline reads (intermediate steps, play-by-play, stints, possessions)
 SKIP = {
@@ -100,3 +106,16 @@ def build(src: Path, dest: Path, since: int) -> dict:
     con.close()
     return {"tables": len(out), "rows": sum(out.values()),
             "mb": round(dest.stat().st_size / 2**20, 1)}  # fmt: skip
+
+
+def publish(dest: Path, tag: str = RELEASE_TAG) -> str:
+    """Gzip the demo database and replace the asset on the repo's ``tag`` release (with the
+    GitHub CLI, signed in, run from the repo); the hosted app picks it up within hours."""
+    gz = dest.with_name(dest.name + ".gz")
+    with open(dest, "rb") as f, gzip.open(gz, "wb", compresslevel=6) as z:
+        shutil.copyfileobj(f, z, 2**20)
+    gh = shutil.which("gh") or r"C:\Program Files\GitHub CLI\gh.exe"
+    subprocess.run([gh, "release", "upload", tag, str(gz), "--clobber"], check=True,
+                   cwd=REPO_ROOT, capture_output=True, text=True)  # fmt: skip
+    log.info("published %s (%.0f MB) to release %s", gz.name, gz.stat().st_size / 2**20, tag)
+    return str(gz)

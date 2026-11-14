@@ -1214,3 +1214,13 @@ predictions: the ledger is untouched.
 *Publication, Nov 12:* commit IDs changed when the history was rewritten for publication
 (author email and commit-message trailers; the code is identical). Ledger rows logged
 before then name the old ID: `c5d00cd` is now `bf6366d` ("Spec v1.7").
+
+*Change, Nov 13 (daily automation):* a forecast no longer predicts a game whose scheduled
+tip-off has passed; those teams get their next game instead. Before, a run during a game
+night re-predicted games in progress (flagged `after_tipoff`, and the scorecard takes the
+latest prediction), so an unattended run could have replaced a pre-game prediction with a
+later one. `after_tipoff` stays as a check. `courtvision daily` (a scheduled task, every
+morning) scores the past week's unscored days, forecasts 40 minutes before the day's first
+tip-off with the latest injury report, rebuilds once Kaggle's nightly update arrives (only
+when that can't delay the first forecast) and then forecasts the games still to come, and
+publishes the demo database the live app downloads (`courtvision demo --publish`).
