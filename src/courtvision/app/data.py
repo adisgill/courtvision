@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import logging
 import os
 import shutil
 import threading
@@ -13,6 +14,8 @@ import duckdb
 import pandas as pd
 
 from courtvision.config import get_paths
+
+log = logging.getLogger(__name__)
 
 # the demo database (`courtvision demo`, gzipped) as published on the repo's releases
 DEMO_URL = ("https://github.com/adisgill/courtvision/releases/download/demo-data/"
@@ -84,6 +87,7 @@ def db_path() -> Path:
         current = mark.read_text() if mark.exists() else ""
         if demo.exists() and (version is None or version == current):
             return demo
+        log.warning("downloading the demo copy %s (had %s)", version, current or "none")
         demo.parent.mkdir(parents=True, exist_ok=True)
         part = demo.with_name(demo.name + ".part")
         with urllib.request.urlopen(url, timeout=60) as r, gzip.open(r) as z, \
@@ -107,12 +111,14 @@ def loaded_version() -> str | None:
 
 
 def _remote_version(url: str) -> str | None:
-    """The published copy's version (its ETag), or None when it can't be reached."""
+    """The published copy's version (its ETag), or None when it can't be reached. Asks for
+    its first byte (a plain GET, like the download) rather than a HEAD request."""
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"),
-                                    timeout=15) as r:  # fmt: skip
+        req = urllib.request.Request(url, headers={"Range": "bytes=0-0"})
+        with urllib.request.urlopen(req, timeout=15) as r:
             return r.headers.get("ETag") or r.headers.get("Last-Modified") or ""
-    except OSError:
+    except OSError as e:
+        log.warning("can't check the published demo copy: %s", e)
         return None
 
 

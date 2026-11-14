@@ -8,6 +8,8 @@ first.
 
 from __future__ import annotations
 
+import threading
+
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -35,8 +37,22 @@ def goto(view: str, clear: str | None = None, **keys) -> None:
 
 
 @st.cache_resource(ttl=3 * 3600)
-def _con():
+def _db():
     return D.connect()
+
+
+_THREAD = threading.local()
+_CURSORS = threading.Lock()
+
+
+def _con():
+    """This thread's cursor on the shared connection. Every session runs its script in its
+    own thread, and DuckDB refuses a query on a connection busy with another one."""
+    db = _db()
+    if getattr(_THREAD, "db", None) is not db:
+        with _CURSORS:  # making a cursor is itself a call on the shared connection
+            _THREAD.db, _THREAD.cur = db, db.cursor()
+    return _THREAD.cur
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -48,10 +64,11 @@ def _pick_up_new_data() -> None:
     """At most every 10 minutes, check whether the published demo copy (the daily run
     publishes after each forecast) differs from the one downloaded here; if so, drop every
     cache, so the next query reconnects to it, downloading it first."""
-    version = _published()
-    if version and version != D.loaded_version():
+    version, have = _published(), D.loaded_version()
+    if version and version != have:
+        D.log.warning("newer demo copy published: %s (have %s)", version, have)
         st.cache_data.clear()
-        _con.clear()
+        _db.clear()
 
 
 @st.cache_data(ttl=3 * 3600)
