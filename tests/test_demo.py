@@ -70,8 +70,10 @@ def test_app_downloads_the_demo_once_and_again_when_republished(tmp_path, monkey
     assert p == tmp_path / "data" / "demo" / "courtvision.duckdb" and p.read_bytes() == b"first"
     p.write_bytes(b"local")  # unchanged upstream: the local copy is kept
     assert D.db_path().read_bytes() == b"local"
+    seen = D.published_version()  # what the running app checks every 10 minutes
     payload.write_bytes(gzip.compress(b"second"))
     os.utime(payload, (2_000_000_000, 2_000_000_000))  # a newer publication
+    assert D.published_version() not in (None, seen)
     assert D.db_path().read_bytes() == b"second"
 
 
@@ -80,6 +82,7 @@ def test_app_prefers_the_full_database(tmp_path, monkeypatch):
     (tmp_path / "courtvision.duckdb").write_bytes(b"")
     monkeypatch.setenv("COURTVISION_DEMO_URL", "file:///nonexistent.gz")
     assert D.db_path() == tmp_path / "courtvision.duckdb"
+    assert D.published_version() is None  # nothing to check for
 
 
 @pytest.fixture(autouse=True)

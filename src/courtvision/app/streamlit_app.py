@@ -34,9 +34,30 @@ def goto(view: str, clear: str | None = None, **keys) -> None:
     st.rerun()
 
 
-@st.cache_resource(ttl=3 * 3600)  # reconnecting picks up a newly published demo copy
+@st.cache_resource(ttl=3 * 3600)
 def _con():
     return D.connect()
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _published() -> str | None:
+    return D.published_version()
+
+
+@st.cache_resource
+def _loaded() -> dict:
+    return {}
+
+
+def _pick_up_new_data() -> None:
+    """At most every 10 minutes, check whether a newer demo copy has been published (the
+    daily run publishes after each forecast); if so, drop every cache, so the next query
+    reconnects to the new copy, downloading it first."""
+    version, seen = _published(), _loaded()
+    if version and seen.setdefault("version", version) != version:
+        seen["version"] = version
+        st.cache_data.clear()
+        _con.clear()
 
 
 @st.cache_data(ttl=3 * 3600)
@@ -799,6 +820,8 @@ VIEWS = {"League": league_view, "Upcoming": upcoming_view, "Scorecard": scorecar
          "Game": game_view, "Player": player_view, "Lineups": lineups_view,
          "Plays": plays_view, "Coaches": coaches_view, "Market": market_view,
          "Live": live_view}  # fmt: skip
+
+_pick_up_new_data()
 
 # a link can open a view (?view=scorecard); read on a session's first run, then the sidebar rules
 _linked = {k.lower(): k for k in VIEWS}.get(str(st.query_params.get("view", "")).lower())

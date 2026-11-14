@@ -1224,3 +1224,15 @@ morning) scores the past week's unscored days, forecasts 40 minutes before the d
 tip-off with the latest injury report, rebuilds once Kaggle's nightly update arrives (only
 when that can't delay the first forecast) and then forecasts the games still to come, and
 publishes the demo database the live app downloads (`courtvision demo --publish`).
+
+*Change, Nov 14 (daily run, first day):* the run now also forecasts first thing in the
+morning and publishes, and publishes after every forecast. On Nov 14 the morning rebuild
+finished at 11 AM but nothing was published until the pre-tip forecast, so the live
+Upcoming page showed Friday's games all day. The run itself was then stopped: uv's
+`.venv\Scripts\pythonw.exe` is a console program (byte-identical to `python.exe`), so the
+task opened a terminal tab, and closing it ended the run. The task now starts the base
+interpreter's `pythonw.exe` on `scripts/daily_task.pyw` (no console at all), with noon
+and 4 PM starts as a fallback (one run at a time). The live app checks for a newer demo
+copy every 10 minutes (it was 3 hours), and the Upcoming page drops games from earlier
+days and says when the forecast was made. The extra morning forecast changes nothing that
+is scored: the scorecard grades each game's latest prediction before its tip-off.

@@ -81,12 +81,7 @@ def db_path() -> Path:
     url = os.environ.get("COURTVISION_DEMO_URL", DEMO_URL)
     with _DOWNLOAD:
         mark = demo.with_name(demo.name + ".version")
-        try:
-            with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"),
-                                        timeout=15) as r:  # fmt: skip
-                version = r.headers.get("ETag") or r.headers.get("Last-Modified") or ""
-        except OSError:
-            version = None  # offline: keep the copy we have
+        version = _remote_version(url)  # None offline: keep the copy we have
         current = mark.read_text() if mark.exists() else ""
         if demo.exists() and (version is None or version == current):
             return demo
@@ -98,6 +93,23 @@ def db_path() -> Path:
         part.replace(demo)  # open connections keep reading the old file until they close
         mark.write_text(version or "")
     return demo
+
+
+def _remote_version(url: str) -> str | None:
+    """The published copy's version (its ETag), or None when it can't be reached."""
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"),
+                                    timeout=15) as r:  # fmt: skip
+            return r.headers.get("ETag") or r.headers.get("Last-Modified") or ""
+    except OSError:
+        return None
+
+
+def published_version() -> str | None:
+    """Version of the demo copy now published (None with a full database, or offline)."""
+    if get_paths().duckdb.exists():
+        return None
+    return _remote_version(os.environ.get("COURTVISION_DEMO_URL", DEMO_URL))
 
 
 def connect() -> duckdb.DuckDBPyConnection:

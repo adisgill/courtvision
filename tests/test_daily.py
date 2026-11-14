@@ -77,6 +77,22 @@ def test_unscored_days(con):
     assert daily.unscored_days(con, today) == [date(2026, 11, 12), date(2026, 11, 13)]
 
 
+def test_run_forecasts_and_publishes_first_thing(tmp_path, monkeypatch, caplog):
+    """The live app gets today's games in the morning, not only before tip-off."""
+    db = tmp_path / "cv.duckdb"
+    with duckdb.connect(str(db)) as c:
+        c.execute("create schema kaggle")
+        c.execute("create table kaggle.league_schedule_26_27 (gameId int, gameDateTimeEst "
+                  "timestamp, homeTeamId int, awayTeamId int, gameLabel varchar)")  # fmt: skip
+    monkeypatch.setattr(daily, "get_paths", lambda: type("P", (), {"duckdb": db})())
+    monkeypatch.setattr(daily, "_keep_awake", lambda: None)
+    caplog.set_level("INFO", logger=daily.__name__)
+    daily.run(dry_run=True)
+    steps = [r.getMessage() for r in caplog.records if r.getMessage().startswith("$ ")]
+    assert steps == ["$ courtvision ingest injuries --fetch", "$ courtvision forecast",
+                     "$ courtvision demo --publish"]  # fmt: skip
+
+
 def test_forecast_skips_games_in_progress(con):
     before = upcoming(con, 2026, today=date(2026, 11, 13), now=datetime(2026, 11, 13, 18, 0))
     assert list(before.game_id) == ["0000000001", "0000000002"]

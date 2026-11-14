@@ -280,8 +280,12 @@ def render(con, team_label, short_team, players: pd.DataFrame, mode: str, goto) 
         st.warning("No forecasts yet. Run `courtvision forecast`.")
         return
     games = D.q(con, "select * from forecast.games order by tipoff")
+    # a forecast lists each team's next game as of when it ran: drop the days since gone by
+    today = pd.Timestamp.now(tz="America/New_York").tz_localize(None).normalize()
+    games = games[pd.to_datetime(games.tipoff) >= today].reset_index(drop=True)
     if games.empty:
-        st.info("No upcoming games in the schedule.")
+        st.info("No forecast for today's games yet: the daily run posts one each morning "
+                "and again 40 minutes before the first tip-off.")  # fmt: skip
         return
     season = int(D.q(con, "select max(season) as s from metrics.team_season").s.iloc[0])
     games["label"] = [
@@ -293,8 +297,16 @@ def render(con, team_label, short_team, players: pd.DataFrame, mode: str, goto) 
 
     last = D.q(con, "select max(game_date) as d from stg.games where home_score is not null")
     st.subheader("Next game for every team")
-    st.caption(f"Predicted from games through {pd.to_datetime(last.d.iloc[0]):%b %d, %Y} "
-               "(refresh with `courtvision build` after the nightly Kaggle update).")  # fmt: skip
+    made = ""
+    if _has_table(con, "forecast", "ledger_games"):
+        at = D.q(con, "select max(predicted_at) t from forecast.ledger_games").t.iloc[0]
+        if pd.notna(at):
+            when = f"{pd.to_datetime(at):%a %b %d, %I:%M %p}".replace(" 0", " ")
+            made = f"Forecast made {when} ET, from"
+    st.caption(f"{made or 'Predicted from'} games through "
+               f"{pd.to_datetime(last.d.iloc[0]):%b %d, %Y}. Updated every day: in the "
+               "morning, after the nightly data refresh, and 40 minutes before the first "
+               "tip-off.")  # fmt: skip
     fig = go.Figure(go.Bar(
         y=games.label + "  ·  " + games.when, x=games.home_win_prob - 0.5, orientation="h",
         base=0.5, marker_cornerradius=4,
@@ -315,11 +327,10 @@ def render(con, team_label, short_team, players: pd.DataFrame, mode: str, goto) 
     st.caption("Blue: home team favored; orange: away team favored. Number after the dot: "
                "predicted home margin. **Click a game** to open its preview.")  # fmt: skip
     pick = C.selected(ev)
-    gid = (
-        pick
-        if pick in set(games.game_id)
-        else st.session_state.get("u_game", games.game_id.iloc[0])
-    )
+    ids = set(games.game_id)
+    gid = pick if pick in ids else st.session_state.get("u_game")
+    if gid not in ids:  # first visit, or that game has dropped off since
+        gid = games.game_id.iloc[0]
     st.session_state["u_game"] = gid
     g = games[games.game_id == gid].iloc[0]
     home, away = int(g.home_team_id), int(g.away_team_id)

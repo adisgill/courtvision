@@ -1,14 +1,16 @@
 """The daily run (``courtvision daily``), meant to start every morning from a scheduled task:
 
 1. **Score** every logged day of the past week that isn't fully scored (yesterday, after a
-   normal night), then **publish** the demo so the live app shows the results.
-2. **Forecast** ``LEAD`` before the day's first tip-off, with the latest injury report, and
-   publish. The forecast never predicts a game that has started (those teams get their
-   next game), so every logged prediction for a game was made before it.
+   normal night), then **forecast** right away and **publish** the demo, so the live app
+   shows last night's results and today's games from the morning on.
+2. **Forecast** again ``LEAD`` before the day's first tip-off, with the latest injury
+   report, and publish. A forecast never predicts a game that has started (those teams
+   get their next game), so every logged prediction for a game was made before it, and
+   the latest one before tip-off is the one scored.
 3. **Refresh the data** once Kaggle publishes its nightly update (polled every ``POLL``;
    downloads can fail for a while after publication, so they're retried): download and
    ``build``, then forecast again (every game not yet started, latest injury report) and
-   publish. A rebuild starts only if it can't delay the first forecast and while games
+   publish. A rebuild starts only if it can't delay the pre-tip forecast and while games
    are still to come (on a day without games, until ``NO_GAMES_LAST_BUILD``).
 
 Each step runs as its own ``courtvision`` process, logged to
@@ -102,7 +104,10 @@ class Runner:
         self.dry_run = dry_run
         exe = Path(sys.executable)
         console = exe.with_name("python.exe")  # under pythonw, children still get a pipe
-        self.python = str(console if console.exists() else exe)
+        # started by scripts/daily_task.pyw, this is the base interpreter: steps use the venv's
+        self.python = os.environ.get("COURTVISION_PYTHON") or str(
+            console if console.exists() else exe
+        )
 
     def __call__(self, *args: str) -> bool:
         log.info("$ courtvision %s", " ".join(args))
@@ -146,8 +151,6 @@ def run(dry_run: bool = False) -> dict:
     for d in days:
         if step("scorecard", "--date", f"{d}"):
             done["scored"].append(f"{d}")
-    if done["scored"]:
-        step("demo", "--publish")
 
     def forecast() -> None:
         step("ingest", "injuries", "--fetch")
@@ -158,35 +161,40 @@ def run(dry_run: bool = False) -> dict:
     def games_left() -> bool:
         return any(t - timedelta(minutes=5) > datetime.now() for t in day_tips)
 
-    # started late (the computer was off at the scheduled time): forecast what's left now
-    first_done = p["forecast_at"] is None or not games_left()
-    while not dry_run:
-        now = datetime.now()
-        if not first_done and now >= p["forecast_at"]:
-            forecast()
-            first_done = True
-            continue
-        if not done["rebuilt"] and can_build(now, p, first_done):
-            try:
-                newer = kaggle_newer(kaggle_download.last_updated(),
-                                     kaggle_download.downloaded_at(paths.kaggle_raw))  # fmt: skip
-            except Exception as e:  # network blips: try again next round
-                log.info("kaggle check failed: %s", e)
-                newer = False
-            if newer and step("ingest", "kaggle"):
-                done["rebuilt"] = step("build")
-                if first_done and games_left():
-                    forecast()  # the games still to come, on the fresh data
-                elif first_done:
-                    step("demo", "--publish")
+    # first thing: today's games (and last night's scores) on the live app, from the data so
+    # far; the forecast that counts runs LEAD before the first tip-off (started after that,
+    # because the computer was off, the one just made is it)
+    forecast()
+    pretip = p["forecast_at"] is None or not games_left() or datetime.now() >= p["forecast_at"]
+    try:
+        while not dry_run:
+            now = datetime.now()
+            if not pretip and now >= p["forecast_at"]:
+                forecast()
+                pretip = True
                 continue
-        if first_done and (done["rebuilt"] or not can_build(now, p, True)):
-            break
-        wake = now + POLL
-        if not first_done:
-            wake = min(wake, p["forecast_at"])
-        time.sleep(max(1.0, (wake - datetime.now()).total_seconds()))
-    if not done["rebuilt"]:
+            if not done["rebuilt"] and can_build(now, p, pretip):
+                try:
+                    have = kaggle_download.downloaded_at(paths.kaggle_raw)
+                    newer = kaggle_newer(kaggle_download.last_updated(), have)
+                except Exception as e:  # network blips: try again next round
+                    log.info("kaggle check failed: %s", e)
+                    newer = False
+                if newer and step("ingest", "kaggle"):
+                    done["rebuilt"] = step("build")
+                    forecast()  # games not yet started, on the fresh data; published
+                    continue
+            if pretip and (done["rebuilt"] or not can_build(now, p, True)):
+                break
+            wake = now + POLL
+            if not pretip:
+                wake = min(wake, p["forecast_at"])
+            log.info("waiting until %s", f"{wake:%H:%M}")  # a trace of when it was alive
+            time.sleep(max(1.0, (wake - datetime.now()).total_seconds()))
+    except KeyboardInterrupt:  # Ctrl+C, or its console window closed (see daily_task.pyw)
+        log.info("stopped: interrupted (Ctrl+C or its console window closed)")
+        raise
+    if not done["rebuilt"] and not dry_run:
         log.info("no rebuild today: Kaggle's update didn't arrive (or download) in time")
     log.info("done: %s", done)
     return done

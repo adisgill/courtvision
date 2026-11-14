@@ -33,7 +33,7 @@ types, coaching analytics and a player market.
   r ≈ 0), a lineup's own plus-minus predicts its future worse than assuming league
   average, and coach-vs-coach history and positional matchups add nothing out of sample.
   Each is in [`docs/validation.md`](docs/validation.md).
-- **Reproducible:** `courtvision build` rebuilds everything from the raw caches; 109 tests.
+- **Reproducible:** `courtvision build` rebuilds everything from the raw caches; 110 tests.
 
 **Stack:** Python 3.12 · DuckDB + Parquet · pandas · Streamlit + Plotly · uv · pytest · ruff
 
@@ -166,23 +166,28 @@ The [live app](https://courtvis.streamlit.app/) runs the root
 `streamlit_app.py` on Streamlit Community Cloud. With no database of its own, it
 downloads the `courtvision demo` file from the repo's
 [`demo-data` release](https://github.com/adisgill/courtvision/releases/tag/demo-data), and
-picks up a newer one within 3 hours of it being uploaded
+picks up a newer one within 10 minutes of it being uploaded
 (`uv run courtvision demo --publish` builds and uploads it, with the GitHub CLI).
 
-**Every day, unattended.** `courtvision daily` scores the past week's unscored days,
-forecasts 40 minutes before the day's first tip-off with the latest injury report,
+**Every day, unattended.** `courtvision daily` scores the past week's unscored days and
+forecasts right away (so the Upcoming page shows the day's games from the morning on),
+forecasts again 40 minutes before the day's first tip-off with the latest injury report,
 rebuilds once Kaggle's nightly update lands (then re-forecasts the games still to come),
-and publishes the demo after each step, logging to `data/logs/`. A forecast never
+and publishes the demo after each forecast, logging to `data/logs/`. A forecast never
 predicts a game that has started. To run it every morning on Windows (the machine's clock
 must be US Eastern, like the schedule; it needs the computer on and signed in, and the
 local app closed while it writes):
 
 ```powershell
 $repo = "C:\path\to\courtvision"
+# the base interpreter's pythonw.exe, which has no window: uv's .venv\Scripts\pythonw.exe
+# opens a console, and closing that window stops the run
+$py = ((Get-Content "$repo\.venv\pyvenv.cfg" | Select-String '^home\s*=\s*(.+)$').Matches[0].Groups[1].Value).Trim()
 Register-ScheduledTask -TaskName "courtvision daily" `
-  -Action (New-ScheduledTaskAction -Execute "$repo\.venv\Scripts\pythonw.exe" -Argument "-m courtvision daily" -WorkingDirectory $repo) `
-  -Trigger (New-ScheduledTaskTrigger -Daily -At 9:00AM) `
+  -Action (New-ScheduledTaskAction -Execute "$py\pythonw.exe" -Argument "`"$repo\scripts\daily_task.pyw`"" -WorkingDirectory $repo) `
+  -Trigger @((New-ScheduledTaskTrigger -Daily -At 9:00AM), (New-ScheduledTaskTrigger -Daily -At 12:00PM), (New-ScheduledTaskTrigger -Daily -At 4:00PM)) `
   -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 16) -MultipleInstances IgnoreNew)
+# the noon and 4 PM starts only matter if a run stopped early (one runs at a time)
 # Unregister-ScheduledTask -TaskName "courtvision daily" to stop it
 ```
 
