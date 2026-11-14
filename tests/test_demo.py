@@ -70,11 +70,13 @@ def test_app_downloads_the_demo_once_and_again_when_republished(tmp_path, monkey
     assert p == tmp_path / "data" / "demo" / "courtvision.duckdb" and p.read_bytes() == b"first"
     p.write_bytes(b"local")  # unchanged upstream: the local copy is kept
     assert D.db_path().read_bytes() == b"local"
-    seen = D.published_version()  # what the running app checks every 10 minutes
+    # what the running app checks every 10 minutes: the published copy vs the one it has
+    assert D.published_version() == D.loaded_version() is not None
     payload.write_bytes(gzip.compress(b"second"))
     os.utime(payload, (2_000_000_000, 2_000_000_000))  # a newer publication
-    assert D.published_version() not in (None, seen)
+    assert D.published_version() not in (None, D.loaded_version())
     assert D.db_path().read_bytes() == b"second"
+    assert D.published_version() == D.loaded_version()
 
 
 def test_app_prefers_the_full_database(tmp_path, monkeypatch):

@@ -44,18 +44,12 @@ def _published() -> str | None:
     return D.published_version()
 
 
-@st.cache_resource
-def _loaded() -> dict:
-    return {}
-
-
 def _pick_up_new_data() -> None:
-    """At most every 10 minutes, check whether a newer demo copy has been published (the
-    daily run publishes after each forecast); if so, drop every cache, so the next query
-    reconnects to the new copy, downloading it first."""
-    version, seen = _published(), _loaded()
-    if version and seen.setdefault("version", version) != version:
-        seen["version"] = version
+    """At most every 10 minutes, check whether the published demo copy (the daily run
+    publishes after each forecast) differs from the one downloaded here; if so, drop every
+    cache, so the next query reconnects to it, downloading it first."""
+    version = _published()
+    if version and version != D.loaded_version():
         st.cache_data.clear()
         _con.clear()
 

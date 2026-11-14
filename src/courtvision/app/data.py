@@ -77,10 +77,9 @@ def db_path() -> Path:
     full = get_paths().duckdb
     if full.exists():
         return full
-    demo = get_paths().data / "demo" / "courtvision.duckdb"
+    demo, mark = _demo_files()
     url = os.environ.get("COURTVISION_DEMO_URL", DEMO_URL)
     with _DOWNLOAD:
-        mark = demo.with_name(demo.name + ".version")
         version = _remote_version(url)  # None offline: keep the copy we have
         current = mark.read_text() if mark.exists() else ""
         if demo.exists() and (version is None or version == current):
@@ -93,6 +92,18 @@ def db_path() -> Path:
         part.replace(demo)  # open connections keep reading the old file until they close
         mark.write_text(version or "")
     return demo
+
+
+def _demo_files() -> tuple[Path, Path]:
+    """The downloaded demo copy, and the file recording which published version it is."""
+    demo = get_paths().data / "demo" / "courtvision.duckdb"
+    return demo, demo.with_name(demo.name + ".version")
+
+
+def loaded_version() -> str | None:
+    """Version of the demo copy downloaded here (None if there isn't one)."""
+    demo, mark = _demo_files()
+    return mark.read_text() if demo.exists() and mark.exists() else None
 
 
 def _remote_version(url: str) -> str | None:
