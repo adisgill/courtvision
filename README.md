@@ -33,7 +33,7 @@ types, coaching analytics and a player market.
   r ≈ 0), a lineup's own plus-minus predicts its future worse than assuming league
   average, and coach-vs-coach history and positional matchups add nothing out of sample.
   Each is in [`docs/validation.md`](docs/validation.md).
-- **Reproducible:** `courtvision build` rebuilds everything from the raw caches; 102 tests.
+- **Reproducible:** `courtvision build` rebuilds everything from the raw caches; 104 tests.
 
 **Stack:** Python 3.12 · DuckDB + Parquet · pandas · Streamlit + Plotly · uv · pytest · ruff
 
@@ -86,7 +86,10 @@ player shoots and how well against the league from the same spots, and every upc
 game gets a **scouting report**: danger zones, plays to watch, players to watch, lineups.
 **Lineups** rank every five a team uses by what to expect from it (its players' impacts
 plus its own record, shrunk by how little lineup results repeat), find the best fives a
-team could play but hasn't, show which pairs work, and who closes games.
+team could play but hasn't, show which pairs work, and who closes games. Every team and
+player page also has the **season-by-season box score** (per game, totals or per 36;
+record, points per 100 and pace for teams), each number shaded by where it ranked in the
+league that season.
 
 > Status: **v1.8** for every season from 1974-75 (box-score tiers) and 1996-97
 > (play-by-play), with a validation report, a visualizer, a live mode, the market,

@@ -382,6 +382,10 @@ def team_view() -> None:
     with right:
         dimension_charts(r, mode, "team", adj if use_adj else None)
 
+    from courtvision.app import season_stats
+
+    season_stats.render_team(con, team, season, stype, mode, team_label)
+
     st.subheader("Shot zones")
     tab_o, tab_d = st.tabs(["Offense", "Defense (opponent shots)"])
     where = "c.season = ? and c.season_type = ? and c.team_id = ?"
@@ -583,6 +587,10 @@ def player_view() -> None:
     with right:
         if not r.empty:
             dimension_charts(r, mode, "player")
+
+    from courtvision.app import season_stats
+
+    season_stats.render_player(con, pid, season, mode, team_label)
 
     imp = D.impact(con, pid)
     now = imp[imp.season == season]
