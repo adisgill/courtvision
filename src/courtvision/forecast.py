@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import duckdb
 import numpy as np
@@ -169,9 +169,13 @@ def roster_net(minutes: pd.DataFrame, impact: pd.DataFrame, team: int) -> float:
 # ---- upcoming games --------------------------------------------------------------------------
 
 
-def upcoming(con, season: int, today: date | None = None) -> pd.DataFrame:
-    """Each team's next scheduled game from today on (or after the last game with a result,
-    if the data is newer than today's date)."""
+def upcoming(con, season: int, today: date | None = None,
+             now: datetime | None = None) -> pd.DataFrame:  # fmt: skip
+    """Each team's next scheduled game that hasn't tipped off yet (scheduled tip-off after
+    ``now``, the machine's clock, which is Eastern like the schedule), from today on (or
+    after the last game with a result, if the data is newer than today's date). A forecast
+    run during a game day so never re-predicts a game in progress: those teams get their
+    following game."""
     last = con.execute(
         "select max(game_date) from stg.games where season = ? and home_score is not null",
         [season],
@@ -184,9 +188,10 @@ def upcoming(con, season: int, today: date | None = None) -> pd.DataFrame:
                   gameDateTimeEst::date as game_date, gameDateTimeEst as tipoff,
                   homeTeamId as home_team_id, awayTeamId as away_team_id
            from kaggle.league_schedule_26_27
-           where gameDateTimeEst::date > ? and gameLabel is distinct from 'Preseason'
+           where gameDateTimeEst::date > ? and gameDateTimeEst > ?
+             and gameLabel is distinct from 'Preseason'
              and homeTeamId > 0 and awayTeamId > 0  -- knockout games with teams TBD""",
-        [last],
+        [last, now or datetime.now()],
     ).df()
     long = pd.concat([
         sched.assign(team_id=sched.home_team_id), sched.assign(team_id=sched.away_team_id)
