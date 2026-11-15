@@ -45,6 +45,47 @@ def _has(con, schema: str, table: str) -> bool:
                             ).fetchall()[0][0])  # fmt: skip
 
 
+def _append(con, table: str, df: pd.DataFrame) -> None:
+    """Append ``df`` to ``forecast.<table>`` by column name. Columns a newer version adds are
+    added to the table first (earlier rows get nulls; nothing already there changes)."""
+    con.register("tmp_df", df)
+    try:
+        if not _has(con, "forecast", table):
+            con.execute(f"create table forecast.{table} as select * from tmp_df")
+            return
+        have = {r[0].lower() for r in con.execute(
+            "select column_name from information_schema.columns where table_schema = "
+            "'forecast' and table_name = ?", [table]).fetchall()}  # fmt: skip
+        for name, typ, *_ in con.execute("describe tmp_df").fetchall():
+            if name.lower() not in have:
+                con.execute(f'alter table forecast.{table} add column "{name}" {typ}')
+        con.execute(f"insert into forecast.{table} by name select * from tmp_df")
+    finally:
+        con.unregister("tmp_df")
+
+
+QUESTIONABLE_PRIOR = (0.5, 20)  # chance of playing, and how many players' worth it counts
+
+
+def play_rate(con, status: str = "Questionable") -> dict:
+    """How often expected players listed ``status`` (at the time of the prediction that was
+    scored) played, from the scorecard so far, pulled toward ``QUESTIONABLE_PRIOR`` (an even
+    chance) while there are few of them."""
+    p0, m = QUESTIONABLE_PRIOR
+    n = k = 0
+    if all(_has(con, "forecast", t) for t in ("ledger_availability", "scorecard_games",
+                                              "scorecard_players")):  # fmt: skip
+        n, k = con.execute("""
+            select count(*), coalesce(sum(p.played::int), 0)
+            from forecast.ledger_availability a
+            join (select distinct game_id, predicted_at from forecast.scorecard_games) s
+              on s.game_id = a.game_id and s.predicted_at = a.predicted_at
+            join forecast.scorecard_players p
+              on p.game_id = a.game_id and p.person_id = a.person_id and p.stat = 'pts'
+            where a.status = ?""", [status]).fetchall()[0]  # fmt: skip
+    return {"rate": (k + p0 * m) / (n + m), "listed": int(n), "played": int(k)}
+
+
 def _commit() -> str:
     try:
         out = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT,
@@ -74,12 +115,7 @@ def log_predictions(con: duckdb.DuckDBPyConnection, predicted_at: datetime | Non
         df = con.execute(f"select * from forecast.{src}").df()
         for k, v in meta.items():
             df[k] = v
-        con.register("tmp_df", df)
-        if _has(con, "forecast", dst):
-            con.execute(f"insert into forecast.{dst} by name select * from tmp_df")
-        else:
-            con.execute(f"create table forecast.{dst} as select * from tmp_df")
-        con.unregister("tmp_df")
+        _append(con, dst, df)
         counts[dst] = len(df)
     return {"predicted_at": str(when), **counts}
 
@@ -172,9 +208,13 @@ def score(con: duckdb.DuckDBPyConnection, day: str, source: str = "auto") -> dic
     # scheduled tip-off (Eastern, from the schedule) vs when the prediction was made (the
     # machine's local time, Eastern here)
     sc["after_tipoff"] = sc.predicted_at > pd.to_datetime(sc.tipoff)
+    # each prediction's own range; predictions logged before ranges adapted to the season
+    # used the backtest spread
     sigma = float(con.execute("select any_value(sigma) from forecast.margin_model where "
                               "model <> 'player intervals'").fetchall()[0][0] or 13.9)  # fmt: skip
-    sc["margin_inside_80"] = sc.error.abs() <= 1.2816 * sigma
+    rs = sc["range_sigma"] if "range_sigma" in sc.columns else pd.Series(np.nan, index=sc.index)
+    sc["range_sigma"] = rs.astype(float).fillna(sigma)
+    sc["margin_inside_80"] = sc.error.abs() <= 1.2816 * sc.range_sigma
 
     # players: the same run's lines for the scored games
     lp = con.execute("select * from forecast.ledger_players").df()
@@ -218,19 +258,17 @@ def score(con: duckdb.DuckDBPyConnection, day: str, source: str = "auto") -> dic
     keep = ["game_id", "game_date", "tipoff", "home_team_id", "away_team_id", "predicted_at",
             "after_tipoff", "data_through", "injury_report", "commit", "pred_margin",
             "home_win_prob", "home_score", "away_score", "actual_margin", "error",
-            "winner_right", "p_winner", "brier", "margin_inside_80", "source"]  # fmt: skip
+            "winner_right", "p_winner", "brier", "range_sigma", "margin_inside_80",
+            "source"]  # fmt: skip
     sc = sc[[c for c in keep if c in sc.columns]].assign(scored_at=pd.Timestamp.now().floor("s"))
     for name, df in (("scorecard_games", sc), ("scorecard_players", pl)):
         if df.empty:
             continue
-        con.register("tmp_df", df.assign(day=pd.Timestamp(day)))
-        if _has(con, "forecast", name):
+        if _has(con, "forecast", name):  # rescoring a day replaces its rows
+            ids = sorted(set(df.game_id))
             con.execute(f"delete from forecast.{name} where day = ?::date and game_id in "
-                        "(select game_id from tmp_df)", [day])  # fmt: skip
-            con.execute(f"insert into forecast.{name} by name select * from tmp_df")
-        else:
-            con.execute(f"create table forecast.{name} as select * from tmp_df")
-        con.unregister("tmp_df")
+                        "(select unnest(?::varchar[]))", [day, ids])  # fmt: skip
+        _append(con, name, df.assign(day=pd.Timestamp(day)))
     played = pl[pl.played] if len(pl) else pl
     return {
         "day": day, "final_games": len(sc), "winners": f"{int(sc.winner_right.sum())}/{len(sc)}",

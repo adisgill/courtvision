@@ -1010,10 +1010,46 @@ wings, bigs; shrunk with 12 games). 118,415 player-games played:
 
 Ranges: sd = c·√(expected), with c set so 80% of the 2021-22 and 2022-23 misses fall
 inside (an RMS-based width over-covers: counts are peaked with long tails), then checked
-on later seasons. Positional matchups and pace change player errors by less than 0.002;
+on later seasons. *(Replaced Nov 15, below: two-sided ranges.)* Positional matchups and
+pace change player errors by less than 0.002;
 they are kept because they cost nothing, but they aren't claimed to help. Minutes when he
 plays: error 5.5. A projection is conditional on playing: there is no injury feed, and
 26% of players expected from recent games didn't play.
+
+*Change, Nov 15 (after three scored nights): three fixes, each tested before it was used.*
+
+1. **The margin range follows the season.** It was ±1.28 × a fixed 13.9 (the backtest
+   spread). 2026-27 has been unusually lopsided: 14% of games through Nov 14 were decided by
+   25 or more (6-8% in most seasons), and the live model replayed over the season's 183
+   games missed by 15.6 (RMS), so its range held 76% of them. The range's sigma is now the
+   backtest spread updated with the season's own misses so far (a week at a time), the
+   backtest counting as 25 games: chosen from 25-800 on 2021-22 and 2022-23 by how close
+   each month comes to 80% (`forecast.margin_range`). Check seasons 2023-24 to 2025-26, which
+   were ordinary: 79.7 / 80.2 / 78.1% → 80.0 / 79.2 / 78.8%. The 2026-27 replay: 76.0% →
+   80.3%. Win chances keep the fixed spread: updating it moved backtest log loss by less
+   than 0.0001 and made this season's Brier slightly worse (0.2074 → 0.2081). The ledger
+   records each prediction's spread and range (`range_sigma`, `margin_lo`, `margin_hi`) and
+   the scorecard uses it; earlier predictions are scored with the fixed spread they had.
+2. **Questionable players count by their chance of playing.** They counted as playing
+   their usual minutes; of the 13 expected players listed Questionable at forecast time on
+   the first three scored nights, 6 played (of the 11 expected for 15+ minutes, 5). Each now
+   plays with the chance Questionable players have played in the scorecard so far, pulled
+   toward even with 20 players' weight (48% on Nov 15). The minutes he may miss go to
+   teammates in proportion to theirs (the team total is unchanged), which moves the roster
+   view, the margin and teammates' lines; his own line stays what he gets if he plays
+   (`p_play` in `forecast.availability` and the lines). Historical reports aren't stored, so
+   this can't be backtested. Re-predicting the three scored nights moved margins by at most
+   0.6 points (the roster view's weight, 0.46, damps a part-time absence): the effect is
+   mostly on minutes and teammates' lines.
+3. **Player ranges are two-sided.** The symmetric ranges held 80% but missed lopsidedly:
+   4-5% of outcomes below, 15-16% above (counts have a long upper tail). Each side is now
+   c × expected^a, set on 2021-22 and 2022-23 so 10% fall below and 10% above, with the
+   power (0 to 0.8) that keeps each side nearest 10% across deciles of the expected count.
+   Check seasons: 79-81% inside, 10-11% on each side (the first four weeks of a season
+   alone: 10.6% / 10.0%). Ranges are 4% (points) to 19% (steals + blocks) wider on average;
+   a star's points range is narrower than before, a bench player's upper side longer. On the
+   three scored nights the new ranges leaned the other way (12.7% below, 7.8% above, 376
+   player-games): too few to overturn a choice made on 118,000.
 
 ## 17. Play types (2026-11-12)
 
@@ -1164,8 +1200,9 @@ carried (`carried`; day-to-day statuses aren't); a report more than two days old
 game is ignored. Out and Doubtful players leave the expected minutes, and their minutes go
 to teammates in proportion to their own (the team total is unchanged), which moves the
 roster view, the margin, the stat lines and the lineups. Questionable and Probable players
-stay, tagged (Q) / (P) on their stat lines. Each absence's cost is shown: his expected
-minutes had he played times his impact.
+stay, tagged (Q) / (P) on their stat lines; since Nov 15 a Questionable player counts by
+his chance of playing (section 16). Each absence's cost is shown: his expected minutes had
+he played times his impact.
 
 **What knowing who plays is worth** (`courtvision walkforward --availability-test` →
 `forecast.availability_test`, ~8 min): the chosen game model re-run walk-forward with the
@@ -1194,7 +1231,8 @@ latest logged prediction and compares it with the result: from the database when
 nightly Kaggle update has the game, otherwise from the NBA live feed's final box score
 (the source live mode uses; cached, one request per game at most every 10 s). Per game:
 predicted vs final margin, whether the predicted winner won, the win chance's Brier score,
-whether the miss is inside the model's 80% band (±1.28 σ), and `after_tipoff` (the
+whether the miss is inside the prediction's 80% range (±1.28 × its `range_sigma`; the
+backtest σ for predictions logged before Nov 15), and `after_tipoff` (the
 prediction was made after the scheduled tip-off; forecasts read only completed games and
 the injury report, never the game in progress, so this flags timing, not leakage). Per
 player expected to play: each stat line against his box score, inside its 80% range or

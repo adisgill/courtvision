@@ -438,11 +438,20 @@ def build(con: duckdb.DuckDBPyConnection) -> dict:
         # the walk-forward-tested model replaces the blend for margin and win chance (it
         # adds rest and back-to-backs), and adds each player's stat line with a range
         from courtvision.ingest import injuries
+        from courtvision.scorecard import play_rate
         from courtvision.walkforward import live
 
         avail = injuries.for_games(con, res["games"])
         out = set(avail[avail.status.isin(["Out", "Doubtful"])].person_id.dropna().astype(int))
-        wf = live(con, season, res["games"], out)
+        # questionable players play with the chance questionable players have played so far
+        q = play_rate(con)
+        maybe = {p: q["rate"] for p in avail[avail.status == "Questionable"].person_id
+                 .dropna().astype(int) if p not in out}  # fmt: skip
+        log.info("questionable players count at %.0f%% (%d of %d scored so far played)",
+                 100 * q["rate"], q["played"], q["listed"])  # fmt: skip
+        avail["p_play"] = avail.status.map({"Out": 0.0, "Doubtful": 0.0,
+                                            "Questionable": q["rate"]}).fillna(1.0)  # fmt: skip
+        wf = live(con, season, res["games"], out, maybe)
         res["players"] = res["players"][~res["players"].person_id.isin(out)]
         # what each absence costs: his expected minutes had he played, and his impact
         mb = wf["minutes_before"][["person_id", "exp_minutes", "impact"]]

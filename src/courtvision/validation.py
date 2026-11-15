@@ -647,11 +647,24 @@ def walkforward_sections(con) -> list[str]:
         "Player stat lines (player-games played): error of the model, the model without the "
         "positional matchup, without matchup or pace, and the season-to-date average; "
         "correlation with the outcome; share of outcomes inside the 80% range in 2023-24 to "
-        "2025-26 (width fitted on 2021-22 and 2022-23); width constant `spread_c`.",
+        "2025-26, below it and above it (fitted on 2021-22 and 2022-23 so 10% fall on each "
+        "side); each side's width is `c` x expected^`a` (`lo_*`, `hi_*`).",
         "",
         _md_table(pe, ".3f"),
         "",
     ]
+    if _has_table(con, "forecast", "margin_range"):
+        mr = con.sql("select * from forecast.margin_range order by season").df()
+        parts += [
+            "Margin range: the 80% range of the final margin is -/+ 1.28 sigma, with sigma "
+            "the backtest spread updated with the season's own misses so far (a week at a "
+            f"time; the backtest counts as {int(mr.prior_games.iloc[0])} games, chosen on "
+            "2021-22 and 2022-23 so the range holds 80% of games month by month). Coverage on "
+            "the later seasons, against a fixed spread:",
+            "",
+            _md_table(mr[["season", "coverage_fixed", "coverage_season"]], ".3f"),
+            "",
+        ]
     if _has_table(con, "coach", "value_reliability"):
         rel = con.sql("select * from coach.value_reliability").df()
         traits = rel.dropna(subset=["same_coach_corr"]).sort_values("new_team_corr",

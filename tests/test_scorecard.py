@@ -8,7 +8,7 @@ import duckdb
 import pandas as pd
 import pytest
 
-from courtvision.scorecard import log_predictions, score
+from courtvision.scorecard import log_predictions, play_rate, score
 
 
 def _db() -> duckdb.DuckDBPyConnection:
@@ -84,3 +84,41 @@ def test_scorecard_games_and_players():
     reb = p[(p.stat == "reb") & (p.person_id == 1)].iloc[0]
     assert reb.actual == 5 and not reb.inside  # exact bounds, as calibrated
     assert res["inside_80"] == pytest.approx(p[p.played].inside.mean())
+
+
+def test_ledger_takes_new_columns_without_rewriting():
+    con = _db()
+    log_predictions(con, datetime(2026, 11, 12, 18, 0))
+    con.execute("alter table forecast.games add column range_sigma double default 3.0")
+    log_predictions(con, datetime(2026, 11, 12, 18, 30))
+    led = con.execute("select predicted_at, range_sigma, pred_margin from forecast.ledger_games "
+                      "where game_id = 'g1' order by 1").df()  # fmt: skip
+    assert pd.isna(led.range_sigma.iloc[0]) and led.range_sigma.iloc[1] == 3.0
+    assert led.pred_margin.tolist() == [6.0, 6.0]  # the earlier row as it was
+
+
+def test_scorecard_uses_each_predictions_own_range():
+    con = _db()
+    con.execute("alter table forecast.games add column range_sigma double default 3.0")
+    log_predictions(con, datetime(2026, 11, 12, 18, 0))
+    score(con, "2026-11-12", source="db")
+    g = con.execute("select game_id, margin_inside_80, range_sigma from forecast.scorecard_games "
+                    "order by game_id").df()  # fmt: skip
+    # g1 missed by 4: inside +-1.28 x 13.9, outside +-1.28 x 3 (3.8)
+    assert g.range_sigma.tolist() == [3.0, 3.0] and not g.margin_inside_80.any()
+    score(con, "2026-11-12", source="db")  # rescoring replaces the day's rows
+    assert con.execute("select count(*) from forecast.scorecard_games").fetchall()[0][0] == 2
+
+
+def test_play_rate_starts_even_and_learns_from_the_scorecard():
+    con = _db()
+    assert play_rate(con) == {"rate": 0.5, "listed": 0, "played": 0}
+    log_predictions(con, datetime(2026, 11, 12, 18, 0))
+    av = pd.DataFrame({"game_id": ["g1", "g1"], "person_id": [1.0, 2.0],
+                       "status": ["Questionable", "Questionable"],
+                       "predicted_at": pd.Timestamp("2026-11-12 18:00")})  # fmt: skip
+    con.register("a", av)
+    con.execute("create table forecast.ledger_availability as select * from a")
+    score(con, "2026-11-12", source="db")
+    q = play_rate(con)  # player 1 played, player 2 didn't: 1 of 2, pulled toward even
+    assert q["listed"] == 2 and q["played"] == 1 and q["rate"] == pytest.approx(11 / 22)

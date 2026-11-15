@@ -12,6 +12,8 @@ happened, season after season. ``courtvision walkforward`` writes schema ``forec
                     coverage, and what each ingredient (form, pace, positional matchup) adds
 * ``margin_model``  the chosen model's coefficients and sigma, and the player-range
                     widths (``model = 'player intervals'``), for live predictions
+* ``margin_range``  how much the margin's 80% range listens to the season's own misses
+                    (``prior_games``), and its coverage on the check seasons
 * ``wf_residuals``  each game's margin against the base prediction, by coach
 
 ``live`` applies the chosen model and the player lines to upcoming games (used by
@@ -34,8 +36,14 @@ measured, not assumed.
 scaled down only past 250); per-minute rates for points, rebounds, assists, threes,
 steals + blocks and turnovers from recent games (shrunk toward last season); x expected
 pace / team pace; x the opponent's allowance to the player's position group (guards,
-wings, bigs) for that stat, shrunk toward league average. 80% ranges: c * sqrt(expected),
-c fitted on the first two evaluation seasons and checked on the rest.
+wings, bigs) for that stat, shrunk toward league average. 80% ranges: 10% of outcomes
+below and 10% above, each side c * expected^a (counts have a long upper tail, so the upper
+side is longer), fitted on the first two evaluation seasons and checked on the rest.
+
+**Margin range:** the 80% range of the final margin is -/+ 1.28 sigma, with sigma the
+backtest spread updated with the season's own misses so far (the backtest counts as
+``prior_games`` games, chosen on the first two evaluation seasons). Win chances keep the
+backtest sigma: updating it didn't improve them in any season.
 """
 
 from __future__ import annotations
@@ -76,6 +84,9 @@ STYLE = {  # team rate, the opponent's rate allowed: (numerator, denominator)
     "tov": (("b_tov", "b_poss"), ("o_b_tov", "o_b_poss")),
     "paint": (("fga_paint", "fga_r"), ("o_fga_paint", "o_fga_r")),
 }
+Z80 = 1.2816  # an 80% range is the expected value -/+ Z80 sigma
+RANGE_PRIORS = [800, 400, 200, 100, 50, 25]  # games of prior on the margin range's spread
+RANGE_POWERS = [0.0, 0.2, 0.35, 0.5, 0.65, 0.8]  # how a player range's width grows
 
 
 # ---- data ---------------------------------------------------------------------------------
@@ -152,12 +163,15 @@ def style_rates(teams: pd.DataFrame, before: pd.Timestamp, season: int) -> pd.Da
 
 
 def expected_minutes(players: pd.DataFrame, before: pd.Timestamp, season: int,
-                     unavailable: set | None = None) -> pd.DataFrame:  # fmt: skip
+                     unavailable: set | None = None,
+                     maybe: dict | None = None) -> pd.DataFrame:  # fmt: skip
     """Expected minutes per player for his team's next game, if he plays: his recent games
     weighted (half-life ``MINUTES_HALF_LIFE`` team games), for players in one of the
     team's last three games; a team's total is scaled down only past 250. Players in
     ``unavailable`` (ruled out on the injury report) are dropped and their minutes go to
-    their teammates in proportion to their own."""
+    their teammates in proportion to their own. A player in ``maybe`` (questionable) plays
+    with the chance given (``p_play``): the minutes he may not play go to his teammates
+    the same way, and his own stay what he gets when he plays."""
     p = players[(players.season == season) & (players.game_date < before)]
     if p.empty:  # season opener: last season's final weeks
         p = players[(players.season == season - 1) & (players.game_date < before)]
@@ -180,14 +194,18 @@ def expected_minutes(players: pd.DataFrame, before: pd.Timestamp, season: int,
     recent = full[full.rk <= 3].groupby(["person_id", "team_id"]).minutes.sum()
     out = (agg.wm / agg.w).rename("exp_minutes").reset_index()
     out = out[out.set_index(["person_id", "team_id"]).index.isin(recent[recent > 0].index)]
+    out["p_play"] = out.person_id.map(maybe or {}).fillna(1.0).astype(float)
     if unavailable:
+        out.loc[out.person_id.isin(unavailable), "p_play"] = 0.0
+    if unavailable or maybe:
+        # the team's total is unchanged: the minutes expected to go unplayed are shared out
+        # in proportion to the minutes expected to be played
         before_total = out.groupby("team_id").exp_minutes.transform("sum")
-        keep = ~out.person_id.isin(unavailable)
-        after_total = out.exp_minutes.where(keep, 0).groupby(out.team_id).transform("sum")
-        out["exp_minutes"] = out.exp_minutes * before_total / after_total.where(after_total > 0, 1)
-        out = out[keep]
+        played = (out.exp_minutes * out.p_play).groupby(out.team_id).transform("sum")
+        out["exp_minutes"] = out.exp_minutes * before_total / played.where(played > 0, 1)
+        out = out[out.p_play > 0]
     # a returning player squeezes the others: scale down only past a full game
-    tot = out.groupby("team_id").exp_minutes.transform("sum")
+    tot = (out.exp_minutes * out.p_play).groupby(out.team_id).transform("sum")
     out["exp_minutes"] = out.exp_minutes * np.minimum(1.0, 250 / tot.where(tot > 0, 1))
     return out
 
@@ -203,9 +221,10 @@ def stage1(data: dict, games: pd.DataFrame, cutoff: pd.Timestamp, season: int,
     pace_prev = hist[hist.season == season - 1].groupby("team_id").poss.mean()
     imp = data["impact"][data["impact"].season == season - 1].set_index("person_id").impact
     hca = data["impact"][data["impact"].season == season - 1].home_court.mean()
-    mins = expected_minutes(data["players"], cutoff, season, data.get("unavailable"))
+    mins = expected_minutes(data["players"], cutoff, season, data.get("unavailable"),
+                            data.get("maybe"))  # fmt: skip
     mins["impact"] = mins.person_id.map(imp).fillna(data["newcomer"])
-    roster = (mins.impact * mins.exp_minutes / 48).groupby(mins.team_id).sum()
+    roster = (mins.impact * mins.exp_minutes * mins.p_play / 48).groupby(mins.team_id).sum()
     played = data.get("oracle")  # availability test only: who actually played each game
 
     def team_roster(game_id: str, team: int) -> float:
@@ -269,7 +288,7 @@ def player_lines(data: dict, games: pd.DataFrame, cutoff: pd.Timestamp, season: 
     p = data["players"]
     cur = p[(p.season == season) & (p.game_date < cutoff)]
     prev = p[p.season == season - 1]
-    mins = expected_minutes(p, cutoff, season, data.get("unavailable"))
+    mins = expected_minutes(p, cutoff, season, data.get("unavailable"), data.get("maybe"))
     if mins.empty:
         return pd.DataFrame()
     base = prev if prev.minutes.sum() > 0 else cur
@@ -341,8 +360,102 @@ def apply_stage2(model: dict, df: pd.DataFrame) -> np.ndarray:
     return x @ model["beta"]
 
 
+def _has_table(con, schema: str, table: str) -> bool:
+    return bool(con.execute("select count(*) from information_schema.tables where "
+                            "table_schema = ? and table_name = ?", [schema, table]
+                            ).fetchall()[0][0])  # fmt: skip
+
+
+def margin(beta: dict, df: pd.DataFrame) -> pd.Series:
+    """The stage-2 margin from stored coefficients (``forecast.margin_model``)."""
+    return beta["intercept"] + sum(beta[f] * df[f] for f in beta if f != "intercept")
+
+
 def _phi(z):
     return 0.5 * (1 + np.vectorize(math.erf)(z / math.sqrt(2)))
+
+
+# ---- ranges ---------------------------------------------------------------------------------
+
+
+def weekly_cutoffs(dates: pd.Series) -> pd.Series:
+    """Each game's weekly cutoff, as the walk-forward predicts: the first game day of the
+    dates given plus whole weeks."""
+    first = dates.min()
+    return first + pd.to_timedelta((dates - first).dt.days // STEP_DAYS * STEP_DAYS, unit="D")
+
+
+def season_misses(df: pd.DataFrame, pred: pd.Series) -> pd.DataFrame:
+    """For each game of one season (``df``: game_date, margin), the season's games played
+    before its weekly cutoff: how many (``n``) and their squared misses summed (``sse``)."""
+    d = df.assign(cut=weekly_cutoffs(df.game_date), e2=(df.margin - pred) ** 2)
+    n, sse = {}, {}
+    for c in d.cut.unique():
+        before = d[d.game_date < c]
+        n[c], sse[c] = len(before), float(before.e2.sum())
+    return pd.DataFrame({"n": d.cut.map(n).astype(float), "sse": d.cut.map(sse).astype(float)},
+                        index=df.index)  # fmt: skip
+
+
+def range_sigma(s0, n, sse, k):
+    """Spread of the 80% margin range: the backtest's spread ``s0`` updated with this
+    season's own misses so far (``n`` games, squared misses summing to ``sse``), the
+    backtest counting as ``k`` games. Win chances keep ``s0``: updating it didn't make them
+    any better in a backtest season."""
+    return np.sqrt((k * np.square(s0) + sse) / (k + n))
+
+
+def fit_range_prior(df: pd.DataFrame) -> int:
+    """The prior (in games) whose 80% margin ranges come closest to holding 80% of games
+    in every month of the seasons in ``df`` (game_date, season, margin, pred, s0, n, sse)."""
+    month = df.game_date.dt.to_period("M")
+
+    def err(k: int) -> float:
+        inside = (df.margin - df.pred).abs() <= Z80 * range_sigma(df.s0, df.n, df.sse, k)
+        rate = inside.groupby([df.season, month]).mean()
+        return float(np.sqrt(((rate - 0.8) ** 2).mean()))
+
+    return min(RANGE_PRIORS, key=err)
+
+
+def player_bounds(pred, p: dict) -> tuple[np.ndarray, np.ndarray]:
+    """A stat line's 80% range. Each side has its own width, growing with the expected count
+    by its own power (``p``: lo_c, lo_a, hi_c, hi_a): counts have a long upper tail, so the
+    upper side is longer."""
+    pred = np.asarray(pred, float)
+    r = np.maximum(pred, 0.5)
+    lo = np.maximum(pred - p["lo_c"] * r ** p["lo_a"], 0.0)
+    return lo, pred + p["hi_c"] * r ** p["hi_a"]
+
+
+def fit_player_range(pred, act) -> dict:
+    """Both sides of a stat's 80% range: 10% of outcomes below it and 10% above, with the
+    power of the expected count that keeps each side nearest 10% across expected counts
+    (deciles)."""
+    pred, act = np.asarray(pred, float), np.asarray(act, float)
+    r0 = np.maximum(pred, 0.5)
+    dec = pd.qcut(pred, 10, labels=False, duplicates="drop")
+    out = {}
+    for side, sign in (("lo", -1.0), ("hi", 1.0)):
+        best = None
+        for a in RANGE_POWERS:
+            r = r0**a
+            c = float(np.quantile(sign * (act - pred) / r, 0.9))
+            miss = act < np.maximum(pred - c * r, 0.0) if sign < 0 else act > pred + c * r
+            e = float(np.sqrt(((pd.Series(miss).groupby(dec).mean() - 0.1) ** 2).mean()))
+            if best is None or e < best[0]:
+                best = (e, c, a)
+        out[f"{side}_c"], out[f"{side}_a"] = best[1], best[2]
+    return out
+
+
+def range_params(rows: dict, stat: str) -> dict:
+    """A stat's range parameters from ``forecast.margin_model`` ('player intervals' rows);
+    a database from before two-sided ranges has one symmetric width (``spread_<stat>``)."""
+    if f"hi_c_{stat}" in rows:
+        return {k: rows[f"{k}_{stat}"] for k in ("lo_c", "lo_a", "hi_c", "hi_a")}
+    c = Z80 * rows.get(f"spread_{stat}", 1.0)
+    return {"lo_c": c, "lo_a": 0.5, "hi_c": c, "hi_a": 0.5}
 
 
 def score(df: pd.DataFrame, pred: np.ndarray, sigma: float) -> dict:
@@ -439,15 +552,13 @@ def run(con: duckdb.DuckDBPyConnection) -> dict:
     for s in STATS:
         err = played[s] - played[f"{s}_act"]
         b = played[f"{s}_avg"].fillna(played[f"{s}_base"])
-        # spread grows with the expected count: sd = c * sqrt(pred). c is set so 80% of the
-        # fit seasons' misses fall inside (counts are peaked with long tails, so an RMS-based
-        # width over-covers), then tested on the later seasons
-        z = (err[fit_on].abs() / np.sqrt(np.maximum(played[s][fit_on], 0.5))).quantile(0.8)
-        c = float(z / 1.2816)
-        spread[s] = c
-        sd = c * np.sqrt(np.maximum(played[s], 0.5))
-        inside = (played[f"{s}_act"] >= played[s] - 1.2816 * sd) & (
-            played[f"{s}_act"] <= played[s] + 1.2816 * sd)  # fmt: skip
+        # each side of the range set so 10% of the fit seasons' outcomes fall below it and
+        # 10% above (counts have a long upper tail: a symmetric range had 4-5% below and
+        # 15-16% above), then tested on the later seasons
+        spread[s] = fit_player_range(played[s][fit_on], played[f"{s}_act"][fit_on])
+        lo, hi = player_bounds(played[s], spread[s])
+        below, above = played[f"{s}_act"] < lo, played[f"{s}_act"] > hi
+        inside = ~below & ~above
         pev.append({"stat": s, "player_games": len(played),
                     "model_mae": float(err.abs().mean()),
                     "no_matchup_mae": float((played[f"{s}_base"] * played.pace_factor
@@ -455,25 +566,48 @@ def run(con: duckdb.DuckDBPyConnection) -> dict:
                     "form_only_mae": float((played[f"{s}_base"] - played[f"{s}_act"]).abs().mean()),
                     "season_avg_mae": float((b - played[f"{s}_act"]).abs().mean()),
                     "corr": float(played[s].corr(played[f"{s}_act"])),
-                    "coverage_80": float(inside[check].mean()), "spread_c": c})  # fmt: skip
+                    "coverage_80": float(inside[check].mean()),
+                    "below": float(below[check].mean()), "above": float(above[check].mean()),
+                    **spread[s]})  # fmt: skip
     pev.append({"stat": "minutes (when he plays)", "player_games": len(played),
                 "model_mae": float((played.exp_minutes - played.minutes).abs().mean()),
                 "season_avg_mae": float("nan"),
                 "corr": float(played.exp_minutes.corr(played.minutes)),
-                "no_matchup_mae": float("nan"), "form_only_mae": float("nan"),
-                "coverage_80": float("nan"), "spread_c": float("nan")})  # fmt: skip
+                "no_matchup_mae": float("nan"), "form_only_mae": float("nan")})  # fmt: skip
     pev.append({"stat": "played (of expected players)", "player_games": len(pl),
                 "model_mae": float("nan"), "season_avg_mae": float("nan"),
                 "corr": float((pl.minutes > 0).mean()), "no_matchup_mae": float("nan"),
-                "form_only_mae": float("nan"), "coverage_80": float("nan"),
-                "spread_c": float("nan")})  # fmt: skip
+                "form_only_mae": float("nan")})  # fmt: skip
     pev = pd.DataFrame(pev)
+
+    # the margin's 80% range: the backtest spread updated with the season's own misses so
+    # far; the prior is chosen on the first two evaluation seasons, checked on the rest
+    rg = st[st.season.isin(EVAL_SEASONS)].copy()
+    rg["pred"] = rg[f"pred_{best}"]
+    rg = pd.concat([
+        g.assign(s0=fit_stage2(st[st.season < season], FEATURES[best])["sigma"])
+        .join(season_misses(g, g.pred))
+        for season, g in rg.groupby("season")
+    ])  # fmt: skip
+    fit_r = rg.season.isin(EVAL_SEASONS[:2])
+    k = fit_range_prior(rg[fit_r])
+    chk = rg[~fit_r]
+    miss = (chk.margin - chk.pred).abs()
+    margin_range = pd.DataFrame({
+        "coverage_fixed": (miss <= Z80 * chk.s0).groupby(chk.season).mean(),
+        "coverage_season": (miss <= Z80 * range_sigma(chk.s0, chk.n, chk.sse, k))
+        .groupby(chk.season).mean(),
+    }).reset_index().assign(prior_games=k, base_sigma=final["sigma"])  # fmt: skip
+    log.info("margin range: prior of %d games; 80%% coverage by season %s (fixed spread %s)",
+             k, margin_range.coverage_season.round(3).tolist(),
+             margin_range.coverage_fixed.round(3).tolist())  # fmt: skip
 
     margin_model = pd.DataFrame({"feature": ["intercept", *final["features"]],
                                  "beta": final["beta"]})  # fmt: skip
     margin_model["model"], margin_model["sigma"] = best, final["sigma"]
     margin_model = pd.concat([margin_model, pd.DataFrame(
-        {"feature": [f"spread_{s}" for s in STATS], "beta": [spread[s] for s in STATS],
+        {"feature": [f"{p}_{s}" for s in STATS for p in spread[s]],
+         "beta": [v for s in STATS for v in spread[s].values()],
          "model": "player intervals", "sigma": np.nan})], ignore_index=True)  # fmt: skip
     resid_df = st[["game_id", "season", "game_date", "home_team_id", "away_team_id",
                    "coach_h", "coach_a", "margin", "base_pred"]].copy()  # fmt: skip
@@ -482,7 +616,8 @@ def run(con: duckdb.DuckDBPyConnection) -> dict:
                *STATS, *[f"{s}_act" for s in STATS], *[f"{s}_avg" for s in STATS]]  # fmt: skip
     for name, df in (("wf_games", st), ("wf_eval", ev), ("wf_calibration", cal),
                      ("wf_players", pl[keep_pl]), ("wf_player_eval", pev),
-                     ("margin_model", margin_model), ("wf_residuals", resid_df)):  # fmt: skip
+                     ("margin_model", margin_model), ("margin_range", margin_range),
+                     ("wf_residuals", resid_df)):  # fmt: skip
         con.register("tmp_df", df)
         con.execute(f"create or replace table forecast.{name} as select * from tmp_df")
         con.unregister("tmp_df")
@@ -517,18 +652,37 @@ def schedule_rest(con, games: pd.DataFrame) -> pd.Series:
     return pd.Series(out)
 
 
+def season_so_far(data: dict, season: int, before: pd.Timestamp, beta: dict) -> tuple[int, float]:
+    """This season's games before ``before``, each predicted as the walk-forward does (a week
+    at a time, no injury report): how many, and their squared misses summed."""
+    g = data["games"][(data["games"].season == season) & (data["games"].game_date < before)]
+    if g.empty:
+        return 0, 0.0
+    hist = {k: v for k, v in data.items() if k not in ("rest", "coach_idx", "unavailable",
+                                                       "maybe")}  # fmt: skip
+    parts = []
+    for cut in pd.DatetimeIndex(weekly_cutoffs(g.game_date).unique()).sort_values():
+        week = g[(g.game_date >= cut) & (g.game_date < cut + pd.Timedelta(days=STEP_DAYS))]
+        parts.append(stage1(hist, week, cut, season, pd.Series(dtype=float)))
+    s = pd.concat(parts, ignore_index=True)
+    return len(s), float(((s.margin - margin(beta, s)) ** 2).sum())
+
+
 def live(con: duckdb.DuckDBPyConnection, season: int, games: pd.DataFrame,
-         unavailable: set | None = None) -> dict:  # fmt: skip
+         unavailable: set | None = None, maybe: dict | None = None) -> dict:  # fmt: skip
     """The walk-forward model (``forecast.margin_model``) and player lines with calibrated
-    80% ranges, for upcoming ``games`` (game_id, game_date, home/away team ids)."""
+    80% ranges, for upcoming ``games`` (game_id, game_date, home/away team ids).
+    ``unavailable``: players ruled out; ``maybe``: questionable players and their chance of
+    playing. The margin's 80% range uses the backtest spread updated with this season's
+    misses so far (``forecast.margin_range``)."""
     mm = con.execute("select * from forecast.margin_model").df()
     game_m = mm[mm.model != "player intervals"]
-    spread = {f.removeprefix("spread_"): b for f, b in
-              zip(mm[mm.model == "player intervals"].feature,
-                  mm[mm.model == "player intervals"].beta, strict=True)}  # fmt: skip
+    pi = mm[mm.model == "player intervals"]
+    rng = dict(zip(pi.feature, pi.beta, strict=True))
     data = load(con, [season - 1, season])
     data["rest"] = schedule_rest(con, games)
     data["unavailable"] = set(unavailable or ())
+    data["maybe"] = dict(maybe or {})
     data["coach_idx"] = pd.Series(dtype=object)
     g = games[["game_id", "game_date", "home_team_id", "away_team_id"]].copy()
     g["game_date"] = pd.to_datetime(g.game_date)
@@ -536,21 +690,28 @@ def live(con: duckdb.DuckDBPyConnection, season: int, games: pd.DataFrame,
     cutoff = g.game_date.min()
     s1 = stage1(data, g, cutoff, season, pd.Series(dtype=float))
     beta = dict(zip(game_m.feature, game_m.beta, strict=True))
-    s1["pred_margin"] = beta["intercept"] + sum(beta[f] * s1[f] for f in beta if f != "intercept")
+    s1["pred_margin"] = margin(beta, s1)
     sigma = float(game_m.sigma.iloc[0])
     s1["home_win_prob"] = _phi(s1.pred_margin / sigma)
     s1["model"] = game_m.model.iloc[0]
+    k = con.execute("select any_value(prior_games) from forecast.margin_range").fetchall()[0][0] \
+        if _has_table(con, "forecast", "margin_range") else None  # fmt: skip
+    n, sse = season_so_far(data, season, cutoff, beta) if k else (0, 0.0)
+    s1["range_sigma"] = float(range_sigma(sigma, n, sse, k)) if k else sigma
+    s1["margin_lo"] = s1.pred_margin - Z80 * s1.range_sigma
+    s1["margin_hi"] = s1.pred_margin + Z80 * s1.range_sigma
+    log.info("margin range: spread %.1f (backtest %.1f, %d games of this season)",
+             s1.range_sigma.iloc[0], sigma, n)  # fmt: skip
     pl = player_lines(data, g, cutoff, season, dict(zip(s1.game_id, s1.pace, strict=True)))
     if not pl.empty:
         for s in STATS:
-            half = 1.2816 * spread.get(s, 1.0) * np.sqrt(np.maximum(pl[s], 0.5))
-            pl[f"{s}_lo"] = np.maximum(pl[s] - half, 0.0)
-            pl[f"{s}_hi"] = pl[s] + half
-        keep = ["game_id", "team_id", "opp_id", "person_id", "grp", "exp_minutes",
+            pl[f"{s}_lo"], pl[f"{s}_hi"] = player_bounds(pl[s], range_params(rng, s))
+        keep = ["game_id", "team_id", "opp_id", "person_id", "grp", "exp_minutes", "p_play",
                 *[f"{s}{x}" for s in STATS for x in ("", "_lo", "_hi")]]  # fmt: skip
         pl = pl[keep]
     cols = ["game_id", "form", "roster", "pace", "rest_h", "rest_a", "b2b_h", "b2b_a",
-            "rest_diff", "pred_margin", "home_win_prob", "model"]  # fmt: skip
+            "rest_diff", "pred_margin", "home_win_prob", "model", "range_sigma", "margin_lo",
+            "margin_hi"]  # fmt: skip
     before = expected_minutes(data["players"], cutoff, season)  # ignoring the report
     before["impact"] = before.person_id.map(
         data["impact"][data["impact"].season == season - 1].set_index("person_id").impact

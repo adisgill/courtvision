@@ -32,6 +32,16 @@ def _has_table(con, schema: str, table: str) -> bool:
                     "table_schema = ? and table_name = ?", [schema, table]).n.iloc[0])  # fmt: skip
 
 
+def _margin_range(lo: float, hi: float, home: str, away: str) -> str:
+    """A home-margin range in words: 'BOS by 3 to 35', 'NYK by 13 to BOS by 25'."""
+    lo, hi = round(lo), round(hi)
+    if lo >= 0:
+        return f"{home} by {lo} to {hi}"
+    if hi <= 0:
+        return f"{away} by {-hi} to {-lo}"
+    return f"{away} by {-lo} to {home} by {hi}"
+
+
 def _why(con, g, home: str, away: str, mode: str) -> None:
     """The predicted margin split into what each ingredient of the tested model adds."""
     mm = D.q(con, "select feature, beta from forecast.margin_model "
@@ -135,6 +145,14 @@ def _availability(con, gid, home, away, season, short_team) -> None:
                 st.caption(f"Ruled out (Out or Doubtful), these players were expected to add "
                            f"{lost:+.1f} points per 100 possessions to the team. The forecast "
                            "drops them and gives their minutes to teammates.")  # fmt: skip
+            q = r[r.status == "Questionable"]
+            if "p_play" in r.columns and not q.empty and pd.notna(q.p_play.iloc[0]):
+                st.caption(
+                    f"Questionable players count as playing {q.p_play.iloc[0]:.0%} of the "
+                    "time: how often Questionable players have played in the games scored so "
+                    "far, pulled toward even while there are few. The minutes they may miss go "
+                    "to teammates; their own stat lines are for if they play."
+                )
 
 
 def _stat_lines(con, gid, home, away, season, short_team, players, mode) -> None:
@@ -257,8 +275,10 @@ def _accuracy(con, mode: str) -> None:
                       yaxis={"title": "average miss per player-game"})  # fmt: skip
         st.markdown("**Player stat lines vs the season average**")
         st.plotly_chart(fig, width="stretch", key="u_pl_acc")
-    cov = D.q(con, "select avg(coverage_80) c from forecast.wf_player_eval "
-              "where coverage_80 is not null").c.iloc[0]  # fmt: skip
+    ev = D.q(con, "select * from forecast.wf_player_eval where coverage_80 is not null")
+    cov = ev.coverage_80.mean()
+    split = (f", {ev.below.mean():.0%} below and {ev.above.mean():.0%} above"
+             if {"below", "above"} <= set(ev.columns) else "")  # fmt: skip
     better = pe[pe.model_mae < pe.season_avg_mae - 0.005].label.str.lower().tolist()
     tied = pe[(pe.model_mae - pe.season_avg_mae).abs() <= 0.005].label.str.lower().tolist()
     st.caption(
@@ -268,8 +288,8 @@ def _accuracy(con, mode: str) -> None:
             else "Player lines match the season-to-date average"
         )
         + (f" and tie it on {', '.join(tied)}" if tied else "")
-        + f"; the 80% ranges held {cov:.0%} of outcomes in 2023-24 to 2025-26 (fitted on "
-        "the two seasons before). "
+        + f"; the 80% ranges held {cov:.0%} of outcomes in 2023-24 to 2025-26{split} (fitted "
+        "on the two seasons before). "
         "Matchup adjustments for player lines (opponent's defense by position, pace) were "
         "tested and add nothing measurable."
     )
@@ -352,6 +372,12 @@ def render(con, team_label, short_team, players: pd.DataFrame, mode: str, goto) 
         c[3].metric("Form vs roster view", f"{g.net_form:+.1f} / {g.net_roster:+.1f}",
                     help="Home net rating edge per 100 from team form and from the roster's "
                     "per-possession impact over expected minutes.")  # fmt: skip
+    if pd.notna(g.get("margin_lo")):
+        rng = _margin_range(g.margin_lo, g.margin_hi, short_team(home, season),
+                            short_team(away, season))  # fmt: skip
+        st.caption(f"80% range for the final margin: {rng}. Its width follows how far this "
+                   "season's games have landed from the forecast so far (the walk-forward test "
+                   "set it to update with each season's own misses).")  # fmt: skip
     _coaches_line(con, home, away, season, short_team)
     _availability(con, gid, home, away, season, short_team)
     from courtvision.app import scout

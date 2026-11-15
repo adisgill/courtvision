@@ -111,3 +111,27 @@ def test_ruled_out_minutes_go_to_teammates():
     b = base.set_index("person_id").exp_minutes
     o = out.set_index("person_id").exp_minutes
     assert np.allclose(o / b.loc[o.index], o.iloc[0] / b.loc[o.index[0]])  # proportional
+
+
+def test_questionable_minutes_split_by_chance_of_playing():
+    rows = []
+    for g in range(6):
+        for pid, m in ((1, 34), (2, 30), (3, 28), (4, 26), (5, 24), (6, 20), (7, 18), (8, 12)):
+            rows.append({"season": 2026, "game_id": f"g{g}", "team_id": 1, "person_id": pid,
+                         "minutes": m, "game_date": pd.Timestamp("2026-11-01")
+                         + pd.Timedelta(days=g)})  # fmt: skip
+    p = pd.DataFrame(rows)
+    cut = pd.Timestamp("2026-11-10")
+    base = expected_minutes(p, cut, 2026).set_index("person_id")
+    q = expected_minutes(p, cut, 2026, maybe={1: 0.5}).set_index("person_id")
+    assert q.loc[1, "p_play"] == 0.5 and (q.drop(1).p_play == 1).all()
+    assert q.loc[1, "exp_minutes"] > base.loc[1, "exp_minutes"] * 0.99  # if he plays: as usual
+    assert (q.drop(1).exp_minutes > base.drop(1).exp_minutes).all()  # teammates get some
+    # the team's expected total is unchanged: his half-chance of sitting is shared out
+    assert (q.exp_minutes * q.p_play).sum() == pytest.approx(base.exp_minutes.sum())
+    # a sure thing either way is the same as no listing, or ruled out
+    assert np.allclose(expected_minutes(p, cut, 2026, maybe={1: 1.0}).exp_minutes,
+                       base.exp_minutes)  # fmt: skip
+    gone = expected_minutes(p, cut, 2026, maybe={1: 0.0})
+    out = expected_minutes(p, cut, 2026, unavailable={1})
+    assert np.allclose(gone.exp_minutes, out.exp_minutes) and 1 not in set(gone.person_id)
