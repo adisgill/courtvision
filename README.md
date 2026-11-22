@@ -36,13 +36,16 @@ live mode.)
   numbers that agree with NBA.com's own for the same games (average speed r 0.99 by player,
   touches r 0.96, possession time r 0.996), and a shot-quality model whose tracking inputs
   (defender distance and closing speed, touch time, dribbles) cut log loss 2.5% beyond shot
-  location on games it never saw. A local replay viewer animates any game. The plan toward a
-  live model driven by game film is in [`docs/tracking_spec.md`](docs/tracking_spec.md).
+  location on games it never saw. Defense read from positions: who guards whom (the fitted
+  model matches the published one), man or zone, and every ball screen's coverage, checked
+  against 300 blind-labeled screens (drop is read well; the rarer coverages aren't yet). A
+  local replay viewer animates any game. The plan toward a live model driven by game film is
+  in [`docs/tracking_spec.md`](docs/tracking_spec.md).
 - **Negative results kept, not hidden:** lineup "chemistry" doesn't repeat (split-half
   r ≈ 0), a lineup's own plus-minus predicts its future worse than assuming league
   average, and coach-vs-coach history and positional matchups add nothing out of sample.
   Each is in [`docs/validation.md`](docs/validation.md).
-- **Reproducible:** `courtvision build` rebuilds everything from the raw caches; 136 Python tests and the web app's own.
+- **Reproducible:** `courtvision build` rebuilds everything from the raw caches; 145 Python tests and the web app's own.
 
 **Stack:** Python 3.12 · DuckDB + Parquet · pandas · uv · pytest · ruff · web app: React + TypeScript, DuckDB-WASM, Observable Plot (Streamlit + Plotly locally)
 
@@ -189,6 +192,8 @@ uv run courtvision tracking align                      # shots matched to the pl
 uv run courtvision tracking nbacom                     # NBA.com's tracking stats, those games (~15 min cold)
 uv run courtvision tracking movement                   # speed, distance, touches, spacing; vs NBA.com (~6 min)
 uv run courtvision tracking shots                      # shot quality and its out-of-sample report (~1 min)
+uv run courtvision tracking defense                    # matchups, man/zone, screen coverages, help (~8 min)
+uv run courtvision tracking labels evaluate            # the detectors vs the hand labels
 uv run courtvision tracking replay 0021500493 --open   # an animated court for one game (stays local)
 ```
 

@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Screen Spot Check</title>
+<style>
+:root {
+  --bg: #f6f5f1; --panel: #ffffff; --ink: #1c1d1f; --muted: #6a6d73; --line: #d9d6cc;
+  --court: #ece4d3; --court-line: #9a8f78; --off: #2f64c8; --def: #c43d55; --ball: #f0a020;
+  --good: #1d7a4c; --bad: #9a3b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141517; --panel: #1d1f22; --ink: #ecebe7; --muted: #9a9ca1; --line: #34373c;
+    --court: #2a2721; --court-line: #8a8170; --off: #5b8ff0; --def: #ef6b82; --ball: #f5b440;
+    --good: #4fbf86; --bad: #e07a7a;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #141517; --panel: #1d1f22; --ink: #ecebe7; --muted: #9a9ca1; --line: #34373c;
+  --court: #2a2721; --court-line: #8a8170; --off: #5b8ff0; --def: #ef6b82; --ball: #f5b440;
+  --good: #4fbf86; --bad: #e07a7a;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+       font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { padding: 16px 16px 4px; max-width: 1100px; margin: 0 auto; }
+h1 { font-size: 18px; margin: 0 0 4px; }
+p { margin: 4px 0; color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 8px 0; font-size: 13px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+main { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px;
+       padding: 10px 16px 16px; max-width: 1100px; margin: 0 auto; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+        padding: 10px; }
+.card.done { border-color: var(--good); }
+.card h2 { font-size: 13px; margin: 0 0 6px; display: flex; justify-content: space-between; }
+canvas { width: 100%; height: auto; display: block; border-radius: 6px; }
+.label { margin: 8px 0 6px; font-size: 13px; }
+.label b { font-weight: 650; }
+.row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+button, select { font: inherit; font-size: 13px; color: var(--ink); background: var(--bg);
+                 border: 1px solid var(--line); border-radius: 6px; padding: 4px 9px; cursor: pointer; }
+button.on.agree { border-color: var(--good); color: var(--good); font-weight: 650; }
+button.on.disagree { border-color: var(--bad); color: var(--bad); font-weight: 650; }
+.fix { display: none; margin-top: 6px; }
+.fix.show { display: flex; }
+.time { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+footer { max-width: 1100px; margin: 0 auto; padding: 0 16px 24px; }
+textarea { width: 100%; min-height: 90px; font: 12px ui-monospace, monospace; color: var(--ink);
+           background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.count { font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Ball-screen spot check</h1>
+  <p>Each card loops one play (2 s before the screen to 3.5 s after) with the label it was given. Check it against
+     the rules in <code>docs/tracking_labeling_rules.md</code>: <b>Agree</b>, or <b>Disagree</b> and pick what you see.
+     When done, copy the results and paste them in the chat.</p>
+  <div class="legend">
+    <span><i class="sw" style="background:var(--off)"></i>offense</span>
+    <span><i class="sw" style="background:var(--def)"></i>defense</span>
+    <span><i class="sw" style="background:transparent;border:3px solid var(--ball)"></i>ball handler</span>
+    <span><i class="sw" style="background:var(--off);border-radius:2px"></i>screener</span>
+    <span><i class="sw" style="background:var(--ball);width:8px;height:8px"></i>ball</span>
+  </div>
+  <p class="count" id="count"></p>
+</header>
+<main id="cards"></main>
+<footer>
+  <div class="row" style="margin-bottom:8px">
+    <button id="copy">Copy results</button>
+    <span class="time" id="copied"></span>
+  </div>
+  <textarea id="out" readonly aria-label="Results to paste in the chat"></textarea>
+</footer>
+<script>
+const D = __DATA__;
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const PX = 7, W = 50 * PX, H = 47 * PX;
+const state = {};
+try { Object.assign(state, JSON.parse(localStorage.getItem('spotcheck:' + D.key) || '{}')); } catch (e) {}
+function save() {
+  try { localStorage.setItem('spotcheck:' + D.key, JSON.stringify(state)); } catch (e) {}
+  const rows = D.items.map(it => ({ event: it.event, ...(state[it.event] || {}) }));
+  const done = rows.filter(r => r.verdict).length;
+  document.getElementById('count').textContent = `${done} of ${D.items.length} checked`;
+  document.getElementById('out').value = JSON.stringify(rows.filter(r => r.verdict));
+  document.querySelectorAll('.card').forEach(c => c.classList.toggle('done', !!(state[c.dataset.e] || {}).verdict));
+}
+function P(it, x, y) {  // court feet -> canvas: the attacked hoop at the bottom
+  const depth = it.hoop === 0 ? x : 94 - x, lat = it.hoop === 0 ? y : 50 - y;
+  return [lat * PX, (47 - depth) * PX];
+}
+function court(cx) {
+  cx.fillStyle = css('--court'); cx.fillRect(0, 0, W, H);
+  cx.strokeStyle = css('--court-line'); cx.lineWidth = 1.5;
+  const L = (a, b, c, d) => { cx.beginPath(); cx.moveTo(a * PX, (47 - b) * PX); cx.lineTo(c * PX, (47 - d) * PX); cx.stroke(); };
+  L(17, 0, 17, 19); L(33, 0, 33, 19); L(17, 19, 33, 19); L(3, 0, 3, 14); L(47, 0, 47, 14); L(22, 4, 28, 4);
+  cx.beginPath(); const a = Math.acos(22 / 23.75);
+  cx.arc(25 * PX, (47 - 5.25) * PX, 23.75 * PX, Math.PI + a, 2 * Math.PI - a); cx.stroke();
+  cx.beginPath(); cx.arc(25 * PX, (47 - 19) * PX, 6 * PX, 0, 2 * Math.PI); cx.stroke();
+  cx.beginPath(); cx.arc(25 * PX, (47 - 5.25) * PX, 0.9 * PX, 0, 2 * Math.PI); cx.stroke();
+}
+function draw(it, cx, k) {
+  court(cx);
+  const f = it.frames[k];  // [bx, by, x0, y0, ... x9, y9] in tenths of a foot
+  for (let j = 0; j < 10; j++) {
+    const x = f[2 + 2 * j], y = f[3 + 2 * j];
+    if (x === null) continue;
+    const [px, py] = P(it, x / 10, y / 10);
+    const off = Math.floor(j / 5) === it.side, pid = it.ids[j];
+    cx.fillStyle = css(off ? '--off' : '--def');
+    const r = 1.35 * PX;
+    if (pid === it.screener) cx.fillRect(px - r, py - r, 2 * r, 2 * r);
+    else { cx.beginPath(); cx.arc(px, py, r, 0, 2 * Math.PI); cx.fill(); }
+    if (pid === it.handler) { cx.beginPath(); cx.arc(px, py, r + 3, 0, 2 * Math.PI); cx.strokeStyle = css('--ball'); cx.lineWidth = 2.5; cx.stroke(); }
+    cx.fillStyle = '#fff'; cx.font = '700 9px system-ui, sans-serif'; cx.textAlign = 'center'; cx.textBaseline = 'middle';
+    cx.fillText(it.jerseys[j] || '', px, py + 0.5);
+  }
+  if (f[0] !== null) {
+    const [bx, by] = P(it, f[0] / 10, f[1] / 10);
+    cx.beginPath(); cx.arc(bx, by, 3.5, 0, 2 * Math.PI); cx.fillStyle = css('--ball'); cx.fill();
+  }
+}
+const OPTS = { screen: ['yes', 'no', 'unclear'], coverage: ['', 'switch', 'blitz', 'ice', 'show', 'drop', 'unclear'],
+               route: ['', 'over', 'under', 'unclear'] };
+const root = document.getElementById('cards');
+const players = [];
+D.items.forEach((it, n) => {
+  const el = document.createElement('section');
+  el.className = 'card'; el.dataset.e = it.event;
+  const lab = it.label;
+  el.innerHTML = `<h2><span>${n + 1}. ${it.event}</span><span class="time" data-t></span></h2>
+    <canvas width="${W}" height="${H}" aria-label="Replay of ${it.event}"></canvas>
+    <div class="label">Labeled: screen <b>${lab.screen}</b>${lab.coverage ? ` · coverage <b>${lab.coverage}</b>` : ''}${lab.route ? ` · route <b>${lab.route}</b>` : ''}</div>
+    <div class="row">
+      <button data-play>Pause</button>
+      <select data-speed aria-label="Speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option></select>
+      <button class="agree" data-v="agree">Agree</button>
+      <button class="disagree" data-v="disagree">Disagree</button>
+    </div>
+    <div class="row fix">` + Object.entries(OPTS).map(([k, vs]) =>
+      `<select data-k="${k}" aria-label="${k}">${vs.map(v => `<option value="${v}">${k}: ${v || '—'}</option>`).join('')}</select>`).join('') +
+    `</div>`;
+  root.appendChild(el);
+  const cv = el.querySelector('canvas'), cx = cv.getContext('2d');
+  const p = { it, cx, k: 0, playing: true, speed: 1, acc: 0, el };
+  players.push(p);
+  el.querySelector('[data-play]').onclick = e => { p.playing = !p.playing; e.target.textContent = p.playing ? 'Pause' : 'Play'; };
+  el.querySelector('[data-speed]').onchange = e => { p.speed = +e.target.value; };
+  const st = state[it.event] || {};
+  el.querySelectorAll('[data-v]').forEach(b => {
+    b.classList.toggle('on', st.verdict === b.dataset.v);
+    b.onclick = () => {
+      state[it.event] = { ...(state[it.event] || {}), verdict: b.dataset.v };
+      el.querySelectorAll('[data-v]').forEach(x => x.classList.toggle('on', x === b));
+      el.querySelector('.fix').classList.toggle('show', b.dataset.v === 'disagree');
+      save();
+    };
+  });
+  el.querySelector('.fix').classList.toggle('show', st.verdict === 'disagree');
+  el.querySelectorAll('[data-k]').forEach(s => {
+    s.value = st[s.dataset.k] ?? (s.dataset.k === 'screen' ? lab.screen : '');
+    s.onchange = () => { state[it.event] = { ...(state[it.event] || {}), [s.dataset.k]: s.value }; save(); };
+  });
+  draw(it, cx, 0);
+});
+let last = null;
+function tick(t) {
+  if (last !== null) {
+    for (const p of players) {
+      if (!p.playing) continue;
+      p.acc += (t - last) / 40 * p.speed;
+      const step = Math.floor(p.acc); p.acc -= step;
+      if (step) { p.k = (p.k + step) % p.it.frames.length; draw(p.it, p.cx, p.k); }
+      const s = (p.k - p.it.at) / 25;
+      p.el.querySelector('[data-t]').textContent = (s >= 0 ? '+' : '') + s.toFixed(1) + ' s';
+    }
+  }
+  last = t; requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+document.getElementById('copy').onclick = async () => {
+  const txt = document.getElementById('out').value;
+  try { await navigator.clipboard.writeText(txt); document.getElementById('copied').textContent = 'Copied.'; }
+  catch (e) { document.getElementById('out').select(); document.getElementById('copied').textContent = 'Select-all is on: press Ctrl+C.'; }
+};
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => players.forEach(p => draw(p.it, p.cx, p.k)));
+save();
+</script>
+</body>
+</html>

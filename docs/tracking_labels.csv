@@ -1,0 +1,361 @@
+event,screen,coverage,route,confidence,note
+s001,yes,ice,,low,handler defender shifts to screen side; handler goes baseline; screener may not have fully set
+s002,yes,switch,,medium,screener defender ends on handler and handler defender stays near popping screener
+s003,yes,ice,,high,handler defender between handler and screener; handler goes baseline
+s004,no,,,low,ball goes from handler to the square right after; handoff-like
+s005,no,,,medium,transition trailer runs past handler to the corner
+s006,yes,switch,,medium,big low picks up handler; handler defender stays with roller
+s007,no,,,medium,transition; square cuts past handler to the rim
+s008,yes,drop,over,medium,
+s009,no,,,high,handoff
+s010,yes,blitz,over,low,both defenders on handler above the screen; ball passed out
+s011,no,,,medium,handoff
+s012,yes,unclear,unclear,low,panels 3-4 empty: everyone leaves the half court right after the screen
+s013,yes,ice,,medium,handler defender on screen side; handler goes away
+s014,yes,ice,,medium,handler defender on screen side; handler goes to sideline and passes to popping screener
+s015,yes,drop,over,low,screener barely stops (slip-like)
+s016,no,,,high,transition; no defenders near
+s017,yes,drop,over,high,
+s018,yes,show,unclear,low,handler goes away from screen; screener defender steps toward ball then returns
+s019,no,,,high,dribble handoff
+s020,no,,,low,square cuts past; handler defender sagging far off
+s021,yes,drop,over,high,
+s022,yes,drop,over,medium,
+s023,no,,,medium,handler hands the ball to the square
+s024,no,,,medium,square stays in low post about 7 ft away
+s025,no,,,medium,square passes to handler; no screen
+s026,yes,ice,,medium,handler defender on screen side; handler goes away to the wing
+s027,yes,switch,,low,starts like ice; handler goes baseline and the men stay exchanged
+s028,no,,,low,transition; square not in path of handler defender
+s029,no,,,medium,handoff
+s030,yes,unclear,unclear,low,ball turned over to defense right after the screen; screener defender low at the moment
+s031,no,,,low,catch and shoot; square stands near with no defender to screen
+s032,yes,drop,unclear,low,handler holds then goes away; handler defender stays on him
+s033,no,,,medium,transition; square passes by on the outside
+s034,yes,ice,,medium,handler defender on top of screen; handler goes down the sideline
+s035,no,,,high,handoff
+s036,yes,drop,unclear,low,
+s037,yes,drop,over,high,
+s038,yes,ice,,low,handler goes to sideline; ball to roller; could read as switch
+s039,unclear,,,low,trailer stops next to handler; handler holds then drives away
+s040,no,,,medium,handler comes off an off-ball screen to catch
+s041,yes,drop,under,low,screen and pop; handler defender stays below
+s042,yes,drop,under,low,handler goes baseline; handler defender cuts inside the screener
+s043,yes,switch,,medium,big waits low but the men end exchanged
+s044,no,,,high,handoff
+s045,yes,drop,over,medium,
+s046,yes,switch,,high,
+s047,yes,drop,unclear,low,screener defender stays back near the FT line; handler pulls up and shoots right away
+s048,yes,switch,,medium,starts like ice; handler goes baseline and the men stay exchanged
+s049,unclear,,,low,square about 7 ft away; handler passes back out
+s050,yes,drop,over,high,
+s051,yes,drop,over,low,handler went left-down past screener; defender trailed
+s052,yes,ice,,medium,
+s053,yes,ice,,low,defender between handler and screener; handler held and passed
+s054,yes,drop,over,medium,
+s055,yes,show,over,low,
+s056,no,,,low,transition; no on-ball defender to screen
+s057,yes,drop,over,medium,
+s058,yes,drop,unclear,low,drag screen in early offense
+s059,yes,drop,over,medium,
+s060,yes,ice,,medium,
+s061,yes,drop,under,low,handler passed back to popping screener afterwards
+s062,no,,,high,handoff
+s063,yes,switch,,high,
+s064,yes,drop,under,low,
+s065,yes,switch,,medium,
+s066,yes,drop,over,high,
+s067,no,,,medium,square passed to handler then cut
+s068,yes,drop,over,high,
+s069,unclear,,,low,square between handler and defender but may not have set
+s070,yes,ice,,medium,
+s071,no,,,high,handoff
+s072,unclear,,,low,transition; square moving and handler went away
+s073,yes,drop,over,low,
+s074,no,,,low,transition; no defender in screener's way
+s075,yes,drop,over,medium,
+s076,no,,,low,no defender near handler; quick ball movement
+s077,yes,drop,over,medium,
+s078,yes,ice,,medium,
+s079,no,,,low,square passed behind handler; defender in front
+s080,yes,drop,unclear,low,
+s081,yes,drop,under,low,
+s082,no,,,high,handoff
+s083,no,,,high,square passed to handler
+s084,no,,,medium,square passed to handler just before
+s085,yes,show,over,medium,
+s086,no,,,medium,square passed then cut away
+s087,unclear,,,low,square never got next to handler
+s088,no,,,high,handoff
+s089,no,,,low,square beside handler on sideline side; no defender screened
+s090,yes,ice,,low,
+s091,yes,blitz,unclear,low,two defenders on handler near half court
+s092,unclear,,,low,
+s093,yes,drop,over,low,
+s094,yes,drop,over,medium,
+s095,no,,,low,no defender on handler to screen
+s096,no,,,medium,square passed to handler
+s097,no,,,low,transition; square running through
+s098,yes,unclear,unclear,low,
+s099,yes,show,under,low,
+s100,yes,ice,,medium,
+s101,no,,,low,pass then teammate stands above handler; no defender between them
+s102,yes,switch,,medium,panel 4 mostly off court; exchange visible in panel 3
+s103,yes,drop,under,medium,
+s104,no,,,high,handoff
+s105,yes,switch,,low,early offense; matchups exchange after screen
+s106,no,,,medium,pass exchange; no defender screened
+s107,no,,,medium,cut past handler on far side from defender
+s108,yes,drop,under,medium,
+s109,yes,ice,,low,defender between handler and screener; handler goes away
+s110,yes,ice,,medium,handler forced baseline
+s111,yes,ice,,medium,handler forced baseline
+s112,yes,drop,over,medium,
+s113,yes,switch,,low,could be drop with guard not recovering
+s114,yes,switch,,low,handler rejects; matchups exchange
+s115,unclear,,,low,screener above handler; defender positions unclear
+s116,yes,show,over,low,handler rejects
+s117,no,,,low,teammate below handler on baseline; no defender to screen
+s118,no,,,medium,teammate above handler; defender not in his path
+s119,yes,unclear,under,low,handler barely uses screen
+s120,no,,,medium,baseline post kickout; no defender screened
+s121,no,,,medium,pass then cut to post
+s122,no,,,medium,handler drives into teammate's defender; handler's defender trails on other side
+s123,yes,drop,over,medium,
+s124,yes,ice,,low,crowded after a handoff
+s125,yes,drop,under,medium,
+s126,yes,unclear,unclear,low,players leave the half court after the moment
+s127,yes,ice,,medium,handler forced toward sideline
+s128,yes,blitz,over,medium,
+s129,yes,drop,under,low,handler reverses after screen
+s130,yes,switch,,medium,
+s131,yes,switch,,low,
+s132,yes,drop,unclear,low,early offense
+s133,yes,switch,,medium,
+s134,unclear,,,low,screener 7 ft away and keeps moving
+s135,yes,drop,under,medium,
+s136,yes,drop,over,medium,
+s137,unclear,,,low,handler's defender hidden at the moment
+s138,yes,unclear,unclear,low,handler moving away from hoop
+s139,yes,drop,under,low,both defenders sag far off handler
+s140,unclear,,,low,transition with two screeners
+s141,unclear,,,low,defender between handler and teammate; possibly ice or just a pass exchange
+s142,yes,switch,,low,could be drop with guard stuck on screener
+s143,no,,,medium,handoff
+s144,no,,,medium,teammate below handler's defender; not in his path
+s145,yes,drop,under,medium,
+s146,no,,,low,handler came off an off-ball screen to catch
+s147,yes,switch,,low,exchange clear only at 3 s
+s148,yes,drop,under,medium,
+s149,yes,ice,,medium,
+s150,yes,show,under,low,could be switch at 1.5 s; back to own men by 3 s
+s151,no,,,medium,square cuts past on the outside; not between handler and his defender
+s152,yes,drop,over,medium,
+s153,no,,,low,handler drives to square standing near the block; no screen set; panel 3 jumps
+s154,yes,switch,,medium,
+s155,yes,drop,under,low,handoff between other players just before; defenders hard to pin
+s156,yes,ice,,medium,handler's defender on screen side; handler goes down the sideline to baseline
+s157,unclear,,,low,panel 3 jumps; early offense
+s158,yes,drop,over,medium,
+s159,yes,unclear,unclear,low,players leave the half court after the screen
+s160,yes,switch,,low,corner screen; exchange seen by panel 4
+s161,yes,switch,,low,screener's defender identity uncertain
+s162,unclear,,,low,panels 3-4 jump
+s163,no,,,medium,handoff
+s164,unclear,,,low,early offense; handler's defender unclear
+s165,yes,switch,,medium,
+s166,yes,drop,under,low,square passed to handler then screened
+s167,yes,switch,,low,panel 4 players leaving the half court
+s168,no,,,low,square passes above handler; defender not screened
+s169,yes,show,over,medium,
+s170,no,,,medium,square runs past behind handler; defender not screened
+s171,yes,drop,over,low,early offense drag screen; defenders matched late
+s172,unclear,,,low,square stops about 7 ft away; late exchange
+s173,yes,drop,unclear,low,handler does not use the screen and passes
+s174,yes,unclear,unclear,low,handler goes away from screen
+s175,yes,show,unclear,low,handler does not use the screen
+s176,no,,,medium,pass then cut past
+s177,yes,switch,,low,extra cutter nearby
+s178,yes,unclear,under,low,
+s179,no,,,low,square passes to handler then slips to corner
+s180,yes,drop,unclear,medium,handler refuses the screen
+s181,yes,show,over,low,
+s182,yes,drop,over,medium,
+s183,yes,drop,over,medium,
+s184,unclear,,,low,baseline drive with square standing near
+s185,yes,drop,over,medium,late exchange by panel 4
+s186,yes,drop,over,low,
+s187,yes,show,unclear,low,
+s188,yes,ice,,medium,
+s189,yes,drop,over,medium,
+s190,yes,drop,over,low,early offense
+s191,yes,unclear,unclear,low,
+s192,yes,drop,unclear,medium,handler does not use the screen
+s193,no,,,medium,cut past; no defender on handler
+s194,yes,ice,,low,
+s195,yes,switch,,low,
+s196,yes,ice,,medium,
+s197,no,,,medium,pass and cut
+s198,no,,,medium,handoff
+s199,yes,show,unclear,low,
+s200,yes,switch,,low,two on the ball briefly before exchange
+s201,yes,drop,under,low,
+s202,yes,ice,,low,set very high above the arc
+s203,yes,drop,over,medium,
+s204,yes,unclear,unclear,low,handler barely uses it
+s205,yes,ice,,medium,
+s206,yes,switch,,low,could be drop with defender stuck
+s207,no,,,medium,cutter heading to post
+s208,yes,drop,over,low,early offense drag
+s209,unclear,,,low,possible off-ball screen into catch
+s210,yes,show,over,low,
+s211,yes,unclear,unclear,low,everyone leaves the half court by panel 3
+s212,yes,drop,over,low,
+s213,no,,,low,off-ball screen into catch
+s214,yes,switch,,medium,
+s215,no,,,medium,handoff
+s216,no,,,medium,handoff
+s217,no,,,medium,handoff
+s218,no,,,medium,pass or handoff from the post
+s219,yes,switch,,medium,
+s220,yes,ice,,medium,
+s221,yes,drop,over,low,
+s222,yes,ice,,medium,then sideline trap
+s223,no,,,medium,handoff
+s224,unclear,,,low,transition traffic
+s225,yes,ice,,low,
+s226,yes,drop,under,low,
+s227,no,,,medium,screener cuts past no defender to screen
+s228,yes,drop,over,medium,
+s229,no,,,low,teammate drifts past no set
+s230,yes,drop,over,medium,
+s231,yes,show,unclear,low,handler refuses and passes
+s232,no,,,medium,post player not near handler
+s233,yes,switch,,medium,
+s234,yes,ice,,medium,
+s235,yes,unclear,over,low,
+s236,yes,drop,over,low,
+s237,yes,drop,under,low,
+s238,yes,drop,over,medium,
+s239,no,,,medium,pass and cut
+s240,no,,,medium,handoff
+s241,yes,ice,,medium,
+s242,yes,ice,,medium,
+s243,no,,,low,slip without setting
+s244,yes,blitz,unclear,low,could be show
+s245,yes,drop,over,medium,
+s246,no,,,medium,off-ball screen into catch
+s247,no,,,medium,handoff
+s248,yes,drop,over,low,
+s249,no,,,medium,handoff
+s250,yes,drop,under,low,
+s251,no,,,medium,pass then cut past the handler; no defender screened
+s252,yes,drop,over,medium,
+s253,yes,drop,over,low,route hard to read
+s254,yes,ice,,low,handler's defender sits between handler and screener; handler goes down sideline
+s255,yes,show,over,low,screener ~7 ft away; handler retreats then drives
+s256,yes,switch,,medium,
+s257,yes,ice,,medium,
+s258,yes,show,over,low,handler hidden under his defender in panels 1-2 and 4
+s259,no,,,high,handoff
+s260,yes,switch,,medium,
+s261,yes,drop,over,low,
+s262,yes,show,over,low,screener's defender at screen level then retreats with handler
+s263,unclear,,,low,early offense; screener not clearly in defender's path
+s264,yes,drop,over,low,early offense
+s265,yes,ice,,medium,screener's defender then stays on handler in corner
+s266,no,,,medium,handoff
+s267,yes,drop,over,medium,
+s268,yes,show,over,low,both defenders touch handler at the screen then he gets past
+s269,yes,drop,over,medium,
+s270,no,,,medium,pass then cut past; handler stationary
+s271,no,,,low,teammate near handler but not in defender's path
+s272,unclear,,,low,early offense; defenders exchange but screener not between handler and defender
+s273,yes,ice,,low,handler goes away from screen; screener's defender drops
+s274,unclear,,,low,play leaves the half court right after the moment
+s275,yes,show,over,low,screener's defender briefly on ball then back to screener
+s276,yes,drop,over,low,
+s277,no,,,high,handoff
+s278,no,,,medium,handoff
+s279,yes,switch,,medium,
+s280,no,,,medium,off-ball screen; handler catches after it
+s281,yes,show,over,low,
+s282,yes,switch,,low,screener passed to handler then screened
+s283,no,,,low,teammate drifting away; no screen
+s284,yes,drop,over,medium,
+s285,yes,drop,over,low,
+s286,yes,switch,,medium,
+s287,yes,drop,over,medium,
+s288,yes,drop,unclear,low,handler retreats instead of using screen
+s289,yes,drop,over,low,
+s290,yes,drop,over,medium,
+s291,yes,unclear,unclear,low,handler leaves the half court; players stand still after
+s292,yes,drop,over,low,
+s293,no,,,medium,off-ball screen; handler catches after it
+s294,yes,drop,over,medium,
+s295,yes,drop,under,low,crowded; handler goes away from screen
+s296,yes,blitz,over,medium,two defenders on ball; roller gets pass
+s297,yes,ice,,low,
+s298,yes,drop,under,medium,
+s299,yes,drop,over,low,early offense drag screen
+s300,yes,show,over,medium,
+p01,,,,low,zone
+p02,,,,medium,man
+p03,,,,medium,zone
+p04,,,,high,zone
+p05,,,,medium,man
+p06,,,,medium,unclear
+p07,,,,low,unclear
+p08,,,,low,unclear
+p09,,,,low,unclear
+p10,,,,medium,man
+p11,,,,medium,zone
+p12,,,,low,zone
+p13,,,,low,unclear
+p14,,,,medium,zone
+p15,,,,medium,zone
+p16,,,,low,unclear
+p17,,,,low,unclear
+p18,,,,low,man
+p19,,,,medium,zone
+p20,,,,low,zone
+p21,,,,low,man
+p22,,,,medium,zone
+p23,,,,medium,zone
+p24,,,,medium,man
+p25,,,,low,unclear
+p26,,,,low,unclear
+p27,,,,low,unclear
+p28,,,,high,man
+p29,,,,low,zone
+p30,,,,low,man
+p31,,,,medium,man
+p32,,,,low,unclear
+p33,,,,medium,man
+p34,,,,low,unclear
+p35,,,,low,unclear
+p36,,,,medium,zone
+p37,,,,low,zone
+p38,,,,high,man
+p39,,,,medium,man
+p40,,,,low,zone
+p41,,,,low,man
+p42,,,,medium,unclear
+p43,,,,medium,man
+p44,,,,low,unclear
+p45,,,,low,unclear
+p46,,,,medium,man
+p47,,,,low,zone
+p48,,,,medium,unclear
+p49,,,,low,unclear
+p50,,,,low,man
+p51,,,,medium,man
+p52,,,,low,man
+p53,,,,low,unclear
+p54,,,,medium,man
+p55,,,,low,unclear
+p56,,,,low,man
+p57,,,,low,man
+p58,,,,low,zone
+p59,,,,low,zone
+p60,,,,medium,man

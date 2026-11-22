@@ -380,3 +380,149 @@ positions, so it stays local (D1).
 - The shot model uses nothing after the release: a shot's kind (rim, tip, launch), its
   flight and its peak are outcomes. A putback is defined from before the release instead
   (the ball was at the rim within the last 3 s).
+
+## 10. Phase T3 results (Nov 22 2026)
+
+`courtvision tracking defense` (matchups, man or zone, screens, coverages, help, outcomes), then
+`courtvision tracking labels sample | draw | evaluate | spot` (the hand-labeled check).
+
+### 10.1 Matchups
+
+Who guards whom is a hidden Markov model over each half-court possession (after Franks et al.
+2015). A defender stands near a mix of his man, the ball and the hoop, and how far he is from
+each attacker's version of that point is the evidence.
+
+- **The weights fit to this data are 0.612 man, 0.115 ball, 0.273 hoop.** Franks et al.
+  found 0.62, 0.11, 0.27 on SportVU data from another season, with different code.
+- A defender's spread around his point is 3.5 ft. That error takes about 2 s to
+  decorrelate, so evidence counts once per 45 frames, not 25 times a second.
+- Defenders change their man about 0.5 times a minute.
+
+### 10.2 Man or zone
+
+A possession is called zone when two things hold:
+- defenders don't go with cutters: when an attacker moves 10+ ft in 2 s, the defender who was
+  on him moves less than 30% as far along his path (in man it's typically 0.5-1);
+- a "spots plus ball shift" story fits the defenders better than the matchups do.
+
+Possessions where the attackers barely move, or nobody cuts, are left unread. Both thresholds
+were set before any labels.
+
+- **Zone on 3.9% of the 109,169 readable half-court possessions.** The most zone: the Lakers,
+  Milwaukee, Houston and Sacramento (5.3-5.6%); the least: San Antonio, New Orleans and Indiana
+  (2.6-2.8%).
+- **Against the labels** (60 possessions, half of them called zone):
+  - of 30 called zone, 15 were labeled zone, 4 man and 11 unclear;
+  - of 30 called man, 18 were labeled man, 3 zone and 9 unclear;
+  - where the labelers could tell, zone calls were right 79% of the time and man calls 86%.
+
+### 10.3 Ball screens and coverages
+
+A screen: a teammate stops within 5 ft of the ball handler, the handler's defender is within
+8 ft of him, the handler is 15+ ft from the hoop, and it isn't a handoff. Its coverage comes from
+where the two defenders go (`defense._screen_row` gives the rules), and the route from the
+handler's defender's path.
+
+- **About 67 screens a game, 42,610 in all.**
+- **Coverage:** drop 73.9%, show 12.0%, switch 7.2%, blitz 4.5%, ice 2.4%.
+- **The screener:** rolls 61%, stays 31%, pops 9%.
+- **The handler's defender:** goes over 71%, under 20%.
+- **The team mix reads right:**
+  - Milwaukee, Jason Kidd's trapping defense, blitzes most (10.3%), then Brooklyn, Houston
+    and Memphis;
+  - Portland, Detroit, Charlotte and the Knicks drop most (80-83%);
+  - San Antonio, Golden State, Boston and Chicago switch most (9-11%).
+
+**The labels.** 300 candidate screens from a looser pool (screener within 8 ft, defender within
+12 ft), stratified by the detector's call (drop 60, show 40, switch 40, blitz 35, ice 35) plus
+90 the detector rejected, and 60 possessions.
+- Labeled blind to written rules (`docs/tracking_labeling_rules.md`) from schematic strips of
+  court panels, by six Claude subagents, 60 events each. The labeler sees only movement, never
+  the detector's call.
+- A drawing bug (bars across panels when a player was off the half court) spoiled 65 strips;
+  they were redrawn and relabeled.
+- The labelers marked half their answers low confidence (180 of 360), so the labels are noisy.
+- You spot-check 30 (D6): `courtvision tracking labels spot` opens them as looping replays with
+  their labels.
+- Rates below are reweighted to the whole pool. Labels are in `docs/tracking_labels.csv`.
+
+| Check (vs the labels) | Result |
+|---|---|
+| Screen detection precision | **0.82** (of what the detector calls a screen, labeled a screen) |
+| Recall within the loose pool | 0.62 (some screens it misses are wider than 5 ft or with the defender 8+ ft off) |
+| Coverage accuracy, detected screens with a clear label | **0.78** |
+| Route (over or under) agreement | 0.93 (61 screens) |
+
+| Coverage | Called | Precision | Labeled | Recall |
+|---|---|---|---|---|
+| drop | 49 | **0.86** | 70 | **0.93** |
+| switch | 35 | 0.49 | 28 | 0.40 |
+| show | 15 | 0.47 | 15 | 0.50 |
+| ice | 18 | 0.56 | 19 | 0.10 |
+| blitz | 20 | 0.25 | 5 | 1.00 |
+
+**What this means:**
+- Drop, the common coverage, is read well.
+- The rarer coverages are coin flips against these labels:
+  - blitz over-fires on a show with a brief moment of two on the ball;
+  - "switch" catches drops where the defenders end up exchanged late;
+  - the labelers saw ice far more often (19% of screens) than the detector calls it (2%).
+
+**A revision that didn't hold up (kept as a negative result).** The labels were split by event
+number:
+- On the odd half (dev), three changes raised coverage accuracy from 0.75 to 0.80:
+  - a blitz needs 1 s of two on the ball;
+  - a switch is judged by who's nearer whom;
+  - a big 8+ ft back at the screen is drop.
+- On the even half (test), never looked at while revising, accuracy fell from 0.81 to 0.76.
+  Switch improved, show and some drops were lost.
+
+So the original rules stand. The variants stay in the code as switches, set off
+(`BLITZ_HOLD`, `SWITCH_RELATIVE`, `DROP_DEEP`). Firmer labels (yours, or video) would be needed
+to tune the rare coverages honestly.
+
+### 10.4 Help and rotations
+
+A drive: the handler, with the ball, gets from beyond 16 ft to inside 10 ft of the hoop within
+2 s (44,550 drives, 71 a game). A help: another defender leaves his man by 4+ ft to end within
+6 ft of the driver.
+
+- 8.8% of drives draw help by this strict definition. Boston, Atlanta, Brooklyn and
+  Sacramento help most (10-11%); Dallas, New Orleans and Portland least (7%).
+- On a kick-out to the man the helper left (642 drives), the receiver is open by a median
+  11 ft at the catch, and a defender closes to 6 ft in a median 0.72 s.
+- Help wasn't hand-labeled; these are geometry, not yet checked.
+
+### 10.5 Outcomes by coverage
+
+Points scored after the screen, until the possession ends (the other team holds the ball 12
+frames, the period ends, or 24 s pass), come from the play-by-play; expected points come from
+the shot model (§9.3).
+
+| Coverage | Screens | Points | Expected points | Shot taken |
+|---|---|---|---|---|
+| switch | 3,055 | 0.93 | 0.80 | 75% |
+| show | 5,121 | 0.91 | 0.75 | 73% |
+| drop | 31,504 | 0.91 | 0.77 | 75% |
+| blitz | 1,910 | 0.86 | 0.73 | 68% |
+| ice | 1,020 | 0.74 | 0.59 | 57% |
+
+- These are descriptive, not causal: defenses choose coverages by matchup and situation (ice
+  mostly on side screens), and a quarter of blitz and switch calls are wrong (§10.3).
+- After a screen the screener rolls for 0.92 points, stays for 0.89, and pops for 0.82.
+- Drives: unhelped 1.05 points; helped without a kick-out 0.93; helped with a kick-out 1.09.
+  The help stops the drive, and the kick-out gives it back.
+- Per team and coverage: `data/tracking/defense/coverage_by_team.parquet`.
+- Lineup-level coverage results aren't reported: half a season leaves too few screens per
+  five.
+
+*Change, Nov 22 (defense, found while building it):*
+- Matchup evidence is tempered by its 2 s decorrelation. Counting all 25 frames a second made
+  defenders flip men six times a minute.
+- The first zone test (spots vs matchups alone) called 25% of possessions zone, because giving
+  each defender his own spot flatters the zone story. Requiring that defenders also not
+  follow cutters brought it to 3.9%.
+- Possession, for outcomes, ends only when the other team holds the ball 12 frames. 173 of
+  590 possession runs in a sample game lasted under 0.5 s: a hand on the ball, a deflection.
+- Help "rotation time" from the help itself was capped (3 s) for most drives, since most help
+  never leads to a pass. It's now measured on kick-outs only.

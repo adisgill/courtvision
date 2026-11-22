@@ -7,6 +7,8 @@
     movement               distance, speed, touches, zones, spacing per player-game; vs NBA.com
     shots                  shot quality at each release; model, out-of-sample report; vs NBA.com
     replay GAME_ID         a local animated-court page for one game
+    defense                matchups, man/zone, ball screens and coverages, help; outcomes
+    labels sample|draw|evaluate|spot   the hand-labeled check of the defense detectors
 
 ``courtvision ingest sportvu [--fetch]`` runs fetch (if asked) and convert.
 """
@@ -110,3 +112,35 @@ def replay(
         import webbrowser
 
         webbrowser.open(path.resolve().as_uri())
+
+
+@app.command()
+def defense(workers: int = typer.Option(6)) -> None:
+    """Matchups, man or zone, ball screens and their coverages, help on drives (every game)."""
+    from courtvision.tracking import defense as D
+
+    typer.echo(json.dumps(D.run(workers=workers)))
+    typer.echo(json.dumps(D.outcomes(workers=workers), indent=1))
+
+
+@app.command()
+def labels(step: str = typer.Argument(..., help="sample, draw, evaluate or spot")) -> None:
+    """The hand-labeled check of the defense detectors (docs/tracking_labeling_rules.md)."""
+    from courtvision.tracking import labels as L
+
+    if step == "sample":
+        s = L.sample()
+        counts = s.groupby(["kind", "stratum"]).size()
+        typer.echo(json.dumps({f"{k}:{st}": int(v) for (k, st), v in counts.items()}))
+    elif step == "draw":
+        typer.echo(json.dumps({"drawn": L.draw()}))
+    elif step == "evaluate":
+        typer.echo(json.dumps(L.evaluate(), indent=1, default=str))
+    elif step == "spot":  # the 30-screen page for checking the labels by eye
+        import webbrowser
+
+        path = L.spot_check()
+        typer.echo(str(path))
+        webbrowser.open(path.resolve().as_uri())
+    else:
+        raise typer.BadParameter("sample, draw, evaluate or spot")
