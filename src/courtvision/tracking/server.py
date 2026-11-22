@@ -302,7 +302,9 @@ class Session:
         if self.i >= r.n:
             return [], []
         f = r.frame(self.i)
+        t0 = time.perf_counter()
         out = self.eng.step(f)
+        self.times.append((time.perf_counter() - t0) * 1000)
         self.i += 1
         return [(out, f)], []
 
