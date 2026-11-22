@@ -38,14 +38,19 @@ live mode.)
   (defender distance and closing speed, touch time, dribbles) cut log loss 2.5% beyond shot
   location on games it never saw. Defense read from positions: who guards whom (the fitted
   model matches the published one), man or zone, and every ball screen's coverage, checked
-  against 300 blind-labeled screens (drop is read well; the rarer coverages aren't yet). A
-  local replay viewer animates any game. The plan toward a live model driven by game film is
-  in [`docs/tracking_spec.md`](docs/tracking_spec.md).
+  against 300 blind-labeled screens (drop is read well; the rarer coverages aren't yet).
+  A streaming engine runs any game frame by frame, about 1 ms a frame (30× real time). Each
+  frame updates the possession's expected value and a live win probability, the same
+  numbers the batch training tables give. On held-out games the film doesn't measurably
+  sharpen win probability moment by moment, since most of it is score and clock. It does
+  anticipate where the number goes: 1.7% less error on the post-possession win probability.
+  A local Live view replays games at 25 frames a second. Plan and results:
+  [`docs/tracking_spec.md`](docs/tracking_spec.md).
 - **Negative results kept, not hidden:** lineup "chemistry" doesn't repeat (split-half
   r ≈ 0), a lineup's own plus-minus predicts its future worse than assuming league
   average, and coach-vs-coach history and positional matchups add nothing out of sample.
   Each is in [`docs/validation.md`](docs/validation.md).
-- **Reproducible:** `courtvision build` rebuilds everything from the raw caches; 145 Python tests and the web app's own.
+- **Reproducible:** `courtvision build` rebuilds everything from the raw caches; 156 Python tests and the web app's own.
 
 **Stack:** Python 3.12 · DuckDB + Parquet · pandas · uv · pytest · ruff · web app: React + TypeScript, DuckDB-WASM, Observable Plot (Streamlit + Plotly locally)
 
@@ -194,6 +199,8 @@ uv run courtvision tracking movement                   # speed, distance, touche
 uv run courtvision tracking shots                      # shot quality and its out-of-sample report (~1 min)
 uv run courtvision tracking defense                    # matchups, man/zone, screen coverages, help (~8 min)
 uv run courtvision tracking labels evaluate            # the detectors vs the hand labels
+uv run courtvision tracking winprob                    # EPV and live win probability; held-out report (~5 min)
+uv run courtvision tracking live 0021500564            # the Live view at http://127.0.0.1:8770/ (stays local)
 uv run courtvision tracking replay 0021500493 --open   # an animated court for one game (stays local)
 ```
 

@@ -526,3 +526,198 @@ the shot model (§9.3).
   590 possession runs in a sample game lasted under 0.5 s: a hand on the ball, a deflection.
 - Help "rotation time" from the help itself was capped (3 s) for most drives, since most help
   never leads to a pass. It's now measured on kick-outs only.
+
+## 11. Phase T4 results (Nov 22 2026)
+
+`courtvision tracking winprob` (training rows, EPV, win probability, the held-out report),
+then `courtvision tracking live GAME_ID` (the Live view) or `courtvision tracking live
+GAME_ID --check` (a whole game through the engine, timed and compared with the batch path).
+
+### 11.1 The streaming engine
+
+- **One code path.** The training tables and the live engine call the same functions:
+  - `state.py`: the causal trackers (who has the ball, which team is on offense, which hoop
+    it attacks);
+  - `epv.raw_features`: the EPV inputs, for one frame or many.
+
+  The batch path runs them over a whole game at once; the engine runs them one frame at a
+  time.
+- **Nothing looks ahead.**
+  - The ball holder: T1-T3's detector used a frame or two of the future. The engine uses its
+    causal twin, which agrees on 99.4% of frames.
+  - Possession changes when the other team has held the ball 12 frames (as in T3).
+  - Each team's hoop comes from where the ball has been held this period; before that, last
+    period's, switched at halftime. It agrees with T3's whole-period rule on 99.8% of frames;
+    the misses are the first seconds of the game.
+- **Checked.** A whole game run frame by frame matches the batch tables at every compared
+  frame (one a second): EPV inputs to 1e-14, offense and score exactly, win probability to
+  1e-15.
+- **Speed** (the budget is 200 ms a frame):
+
+| Game | Frames | Engine, p50 / p99 / worst | Plus the page's message | Faster than real time |
+|---|---|---|---|---|
+| NYK at CHI (0021500493) | 74,636 | 1.1 / 2.4 / 5.3 ms | 1.2 / 2.5 / 5.6 ms | 30× |
+| OKC at POR (0021500564) | 83,170 | 1.1 / 2.4 / 6.6 ms | 1.2 / 2.5 / 6.8 ms | 30× |
+
+In the Live view the replay holds 24.9 frames a second at 1× (25 is real time), and a frame
+reaches the page in under 1 ms on this machine.
+
+### 11.2 The score feed
+
+Win probability needs the score the way a live feed shows it. Each scoring play goes up:
+- **a made field goal:** 12 frames (0.5 s) after the ball reaches the rim (T1's release and
+  rim frames);
+- **a free throw, or a basket the tracking didn't match:** when the possession ends, or half a
+  second of game clock after its play-by-play time, whichever comes first.
+
+So every point is counted exactly once: on the scoreboard, or still to come in the possession
+it belongs to (EPV's target). In a sample game, 97% of scoring plays tie to a tracked
+possession, and the scoreboard ends at the final score.
+
+### 11.3 Expected possession value (EPV)
+
+EPV is the points the team with the ball will still add this possession, from the floor right
+now (after Cervone et al. 2016). Its inputs:
+- the shot clock, and how long the team has had the ball;
+- who holds the ball: an attacker, a defender, or nobody;
+- the holder's distance to the hoop, his nearest defender, the value of a shot from his spot
+  (the T2 location model), and the defenders between him and the hoop (transition);
+- the best open teammate, spacing, and defenders in the paint;
+- when nobody holds the ball, its height and speed toward the hoop (a shot or pass in the air);
+- dead balls: free throws and inbounds.
+
+The model is least squares on a spline basis, numpy only, with one row a second (2.03 million
+in all). It's trained on games before 2016-01-01 (480 games, out of fold within them) and
+tested on the 151 after.
+
+| Test (478,721 moments) | Error (RMSE, points) | Variance explained |
+|---|---|---|
+| A constant | 1.120 | 0 |
+| Clock only (shot clock, possession age, game clock) | 1.118 | 0.4% |
+| **EPV (the floor)** | **1.107** | **2.4%** |
+
+- **The share is small** because most of what a possession scores is whether its shot goes in.
+  Ranked, though, EPV separates possessions: its top tenth of moments led to 1.14 points, its
+  bottom tenth to 0.45.
+- **No overfitting:** 2.5% out of fold on the training games, 2.4% on test.
+- **Situations, on the test games:**
+
+| Moment | EPV | Points that followed |
+|---|---|---|
+| Free-throw setup | 1.23 | 1.24 |
+| Transition (0-1 defenders between the holder and the hoop) | 0.98 | 1.01 |
+| Half court, shot clock 4 s or less | 0.68 | 0.64 |
+| The defense has the ball (the possession is about to change) | 0.35 | 0.35 |
+| Holder open (6+ ft) inside 8 ft (671 moments) | 1.03 | 1.22 |
+
+- **The middle deciles run 0.03-0.09 low on test.** January's offenses scored more than
+  October-December's (0.89 vs 0.86 points still to come per moment), and a model trained on
+  the earlier months can't see that.
+- **Not modeled: end-game strategy.** Score and time aren't EPV inputs. In the last minute:
+  - an offense up 4-6 points, fouled on purpose, scored 0.99 points per possession against
+    0.83 EPV;
+  - an offense up 7+, running out the clock, scored 0.67 against 0.77.
+
+### 11.4 Win probability, with and without the film
+
+**Baseline (score and clock).** 3.47 million states, one every 10 s, from 11,969 games: ten
+seasons of courtvision's play-by-play (2008-09 to 2018-19, leaving out 2015-16). Its inputs,
+after Stern (1994):
+- the margin over the root of the time left;
+- the pre-game margin times it;
+- possession over it.
+
+**Pre-game margin.** courtvision's team model, refitted weekly on earlier games. It picked the
+winner 67% of the time in 2014-15.
+
+**Film terms.** Fitted on the 480 training tracking games, with the baseline kept as an
+offset:
+- EPV beyond an average possession, signed for home, over the root of the time left;
+- lineup strength: the ten players' courtvision impact ratings from 2014-15.
+
+The Live view uses EPV plus lineups, chosen out of fold on the training games.
+
+**Test:** 151 games, one moment a second. Log loss (lower is better):
+
+| Situation | Moments | Score and clock | Recalibrated | + EPV | + EPV + lineups |
+|---|---|---|---|---|---|
+| All | 479,465 | 0.4343 | 0.4345 | 0.4344 | **0.4245** |
+| 1st quarter | 116,216 | 0.5617 | 0.5638 | 0.5637 | **0.5452** |
+| 2nd quarter | 118,127 | 0.4896 | 0.4922 | 0.4922 | **0.4826** |
+| 3rd quarter | 119,886 | 0.4233 | 0.4237 | 0.4236 | **0.4161** |
+| 4th, before the last 5 min | 66,940 | 0.3202 | 0.3178 | 0.3178 | **0.3121** |
+| Last 5 min of the 4th | 52,093 | 0.1794 | 0.1769 | **0.1769** | 0.1769 |
+| Last 5 min, within 5 points | 15,908 | 0.4906 | 0.4797 | 0.4796 | **0.4743** |
+| Last 2 min, within 5 points | 7,378 | 0.3859 | 0.3791 | 0.3790 | **0.3789** |
+| Overtime | 6,203 | 0.5750 | 0.5429 | 0.5424 | **0.5137** |
+
+**What this shows:**
+- **EPV doesn't measurably sharpen win probability moment by moment.**
+  - Log loss moves from 0.43447 to 0.43444 overall. The 95% interval of the gain, resampling
+    games, is −0.00004 to 0.00009.
+  - In the last five minutes within five points, the interval is −0.0009 to 0.0011.
+  - Most of win probability is score and time, and a possession's value is a fraction of a
+    point.
+- **EPV does tell you where win probability is going.** During a possession, add EPV to the
+  baseline and it predicts the baseline's own number after the possession (once its points
+  are on the board) with less squared error:
+  - 1.7% less overall (95% interval 1.2-2.1%);
+  - 1.6% in the last five minutes of close games (0.2-2.7%);
+  - the last two minutes are too few to tell (1.5%, −0.8 to 3.4%).
+
+  This is the in-possession information the film adds: it moves the number before the
+  scoreboard does. In the fitted model, an expected point of possession value is worth 0.74
+  of a point on the scoreboard.
+- **Lineup strength helps more,** mostly early in games (first quarter 0.564 → 0.545):
+  - knowing who's on the floor sharpens a pre-game margin built on a few weeks of games;
+  - by games, its interval over EPV alone is wide (−0.006 to 0.025), but it was also better
+    out of fold on the training games (0.482 → 0.469);
+  - it isn't film: the play-by-play knows who's on the floor.
+
+**Calibration** (the live model, test moments):
+
+| Predicted (home) | Happened | Moments |
+|---|---|---|
+| 0.04 | 0.01 | 61,174 |
+| 0.15 | 0.14 | 34,026 |
+| 0.25 | 0.32 | 38,448 |
+| 0.35 | 0.41 | 34,501 |
+| 0.45 | 0.43 | 34,154 |
+| 0.55 | 0.57 | 38,542 |
+| 0.65 | 0.67 | 45,216 |
+| 0.75 | 0.71 | 48,409 |
+| 0.85 | 0.86 | 57,761 |
+| 0.96 | 0.98 | 87,234 |
+
+The misses in the 0.25-0.35 bins come from a few games: 151 games is a small test for
+whole-game outcomes.
+
+### 11.5 The Live view
+
+`courtvision tracking live GAME_ID` serves http://127.0.0.1:8770/. It needs only the standard
+library: asyncio and a minimal WebSocket.
+
+**The page shows:**
+- the court, the score and both clocks;
+- win probability, film and score-and-clock, with a chart over the game;
+- the possession's expected points;
+- a feed of plays: shot chances (T2) at the release, and screen coverages (T3) 3 s after the
+  screen. Both are read from the batch tables at the moment they would be known.
+
+**Controls:**
+- play, pause, and speeds from 0.5× to 16×;
+- jump to any quarter or the last two minutes. The engine resumes from the trackers' recorded
+  state, exactly.
+
+It listens on 127.0.0.1 only and answers only pages from that address, so raw positions never
+leave the machine (D1). The hosted app can't show it (D7).
+
+*Change, Nov 22 (found while building it):*
+- The live ball holder is causal: backward differences, and a high touch counts once it has
+  lasted 3 frames.
+- Hoops come from votes pooled over both teams. One team's backcourt dribbling early in a
+  period had flipped its hoop (97.6% → 99.8% agreement).
+- EPV is floored at zero. The linear fit dipped below zero in a period's final second, which
+  swung win probability by more than 20 points on a possession with no time to score.
+- The replay clock follows the wall clock. Windows' timer ticks run long, and a fixed tick
+  played the game about 15% slow.

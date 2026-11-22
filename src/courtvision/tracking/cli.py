@@ -9,6 +9,9 @@
     replay GAME_ID         a local animated-court page for one game
     defense                matchups, man/zone, ball screens and coverages, help; outcomes
     labels sample|draw|evaluate|spot   the hand-labeled check of the defense detectors
+    winprob                EPV and live win probability: training rows, models, held-out report
+    live GAME_ID [--check] the Live view (local page fed by the streaming engine); --check runs
+                           the game through the engine, times every frame, compares with batch
 
 ``courtvision ingest sportvu [--fetch]`` runs fetch (if asked) and convert.
 """
@@ -144,3 +147,40 @@ def labels(step: str = typer.Argument(..., help="sample, draw, evaluate or spot"
         webbrowser.open(path.resolve().as_uri())
     else:
         raise typer.BadParameter("sample, draw, evaluate or spot")
+
+
+@app.command()
+def winprob(workers: int = typer.Option(6), rows: bool = typer.Option(True)) -> None:
+    """EPV and film-aware win probability: rows for every game (one a second), the EPV model,
+    the score-and-clock baseline (ten seasons of play-by-play) and the film terms; reports on
+    the held-out games."""
+    from courtvision.tracking import epv as E
+    from courtvision.tracking import winprob as W
+
+    if rows:
+        typer.echo(json.dumps(E.build(workers=workers)))
+    rep = E.fit()
+    typer.echo(json.dumps({k: rep[k] for k in ("r2_film", "r2_clock_only", "rmse_film",
+                                                "rmse_constant")}))  # fmt: skip
+    w = W.fit()
+    typer.echo(json.dumps({k: w[k] for k in ("live_model", "epv_point_worth", "gain_ci95",
+                                              "anticipation")}, indent=1))  # fmt: skip
+
+
+@app.command()
+def live(
+    game_id: str,
+    check: bool = typer.Option(False, "--check", help="time the engine on the whole game"),
+    port: int = typer.Option(8770),
+    open_: bool = typer.Option(False, "--open", help="open it in the browser"),
+) -> None:
+    """The Live view: replay a game through the streaming engine to a local page at 25 frames
+    a second (http://127.0.0.1:8770/; stays on this machine)."""
+    if check:
+        from courtvision.tracking import engine as G
+
+        typer.echo(json.dumps(G.check(game_id), indent=1))
+        return
+    from courtvision.tracking import server as S
+
+    S.serve(game_id, port=port, open_browser=open_)

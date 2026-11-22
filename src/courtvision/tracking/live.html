@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live __TITLE__</title>
+<style>
+:root {
+  --bg: #f6f5f1; --panel: #ffffff; --ink: #1c1d1f; --muted: #6a6d73; --faint: #a3a5aa; --line: #d9d6cc;
+  --court: #ece4d3; --court-line: #9a8f78; --home: #2f64c8; --away: #c43d55; --ball: #f0a020;
+  --made: #1d7a4c; --miss: #9a3b3b; --grid: #ebe8df;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141517; --panel: #1d1f22; --ink: #ecebe7; --muted: #9a9ca1; --faint: #62656b; --line: #34373c;
+    --court: #2a2721; --court-line: #8a8170; --home: #5b8ff0; --away: #ef6b82; --ball: #f5b440;
+    --made: #4fbf86; --miss: #e07a7a; --grid: #2a2c30;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #141517; --panel: #1d1f22; --ink: #ecebe7; --muted: #9a9ca1; --faint: #62656b; --line: #34373c;
+  --court: #2a2721; --court-line: #8a8170; --home: #5b8ff0; --away: #ef6b82; --ball: #f5b440;
+  --made: #4fbf86; --miss: #e07a7a; --grid: #2a2c30;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+       font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; padding: 14px 16px 6px; }
+h1 { font-size: 17px; margin: 0; font-weight: 650; }
+.note { color: var(--muted); font-size: 12px; }
+main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; padding: 8px 16px 16px;
+       align-items: start; }
+@media (max-width: 920px) { main { grid-template-columns: minmax(0, 1fr); } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+#stage { padding: 10px; }
+canvas { display: block; }
+#court { width: 100%; height: auto; border-radius: 6px; }
+.board { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px;
+         padding: 2px 4px 10px; font-variant-numeric: tabular-nums; }
+.team { display: flex; align-items: baseline; gap: 10px; }
+.team.r { justify-content: flex-end; }
+.team b { font-size: 28px; font-weight: 700; }
+.team .ab { font-weight: 650; display: inline-flex; align-items: center; gap: 6px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.clock { text-align: center; }
+.clock .gc { font-size: 20px; font-weight: 650; }
+.clock .sc { color: var(--muted); font-size: 12px; }
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+button, select { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+                 border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+button:hover { border-color: var(--muted); }
+button.on { border-color: var(--ink); }
+input[type=range] { flex: 1; min-width: 160px; accent-color: var(--ink); }
+#info { min-height: 22px; margin-top: 8px; color: var(--muted); }
+#info b { color: var(--ink); }
+aside { display: flex; flex-direction: column; gap: 12px; }
+.card { padding: 12px 14px; }
+.card h2 { font-size: 12px; font-weight: 600; color: var(--muted); margin: 0 0 6px;
+           text-transform: uppercase; letter-spacing: .04em; }
+.wp { display: flex; align-items: baseline; justify-content: space-between; font-variant-numeric: tabular-nums; }
+.wp .big { font-size: 34px; font-weight: 700; }
+.split { display: flex; height: 10px; border-radius: 5px; overflow: hidden; margin: 8px 0 6px; gap: 2px; }
+.split span { display: block; height: 100%; }
+.sub { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.sub b { color: var(--ink); font-weight: 600; }
+.epv { display: flex; align-items: baseline; gap: 8px; font-variant-numeric: tabular-nums; }
+.epv .big { font-size: 26px; font-weight: 700; }
+.meter { position: relative; height: 8px; background: var(--grid); border-radius: 4px; margin: 8px 0 4px; }
+.meter i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: var(--ink); }
+.meter u { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--muted); }
+#chartbox { position: relative; }
+#chart { width: 100%; height: 170px; }
+#tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line);
+       border-radius: 6px; padding: 4px 8px; font-size: 12px; display: none; white-space: nowrap;
+       font-variant-numeric: tabular-nums; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 4px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 18px; height: 0; border-top: 2px solid var(--ink); display: inline-block; }
+.sw.d { border-top: 2px dashed var(--muted); }
+#feed { max-height: 260px; overflow-y: auto; padding-right: 8px; }
+.ev { display: grid; grid-template-columns: 58px minmax(0, 1fr) auto; gap: 8px; padding: 5px 0;
+      border-top: 1px solid var(--line); font-size: 12.5px; align-items: baseline; }
+.ev:first-child { border-top: 0; }
+.ev .t { color: var(--muted); font-variant-numeric: tabular-nums; }
+.ev .v { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; font-weight: 600; }
+.m { color: var(--made); font-weight: 650; } .x { color: var(--miss); font-weight: 650; }
+.foot { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.foot b { color: var(--ink); font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">__TITLE__</h1>
+  <span class="note">Live replay: the engine steps one frame at a time and this page draws what it sends. Raw 2015-16 SportVU positions stay on this machine.</span>
+</header>
+<main>
+  <section class="panel" id="stage">
+    <div class="board">
+      <div class="team"><span class="ab" id="awayAb"></span><b id="awaySc">0</b></div>
+      <div class="clock"><div class="gc" id="gc">–</div><div class="sc" id="sc"></div></div>
+      <div class="team r"><b id="homeSc">0</b><span class="ab" id="homeAb"></span></div>
+    </div>
+    <canvas id="court" width="1880" height="1000" aria-label="Animated court"></canvas>
+    <div class="bar">
+      <button id="play" aria-label="Play or pause">Play</button>
+      <select id="speed" aria-label="Playback speed"></select>
+      <span id="periods"></span>
+      <button id="late" title="Jump to the last two minutes of the fourth quarter">Last 2:00</button>
+      <input type="range" id="scrub" min="0" value="0" aria-label="Position in the game">
+    </div>
+    <div id="info"></div>
+  </section>
+  <aside>
+    <section class="panel card">
+      <h2>Win probability · with the film</h2>
+      <div class="wp"><span><span class="big" id="wpHome">–</span> <span class="sub" id="wpHomeAb"></span></span>
+        <span><span class="sub" id="wpAwayAb"></span> <span class="big" id="wpAway">–</span></span></div>
+      <div class="split"><span id="spH" style="background:var(--home)"></span><span id="spA" style="background:var(--away)"></span></div>
+      <div class="sub" id="wpBase"></div>
+    </section>
+    <section class="panel card">
+      <h2>This possession</h2>
+      <div class="epv"><span class="big" id="epv">–</span><span class="sub" id="epvWho"></span></div>
+      <div class="meter" title="0 to 2 expected points; the tick is an average moment"><i id="epvBar"></i><u id="epvAvg"></u></div>
+      <div class="sub">Expected points still to come this possession, from the floor right now.</div>
+    </section>
+    <section class="panel card">
+      <h2 id="chartTitle">Home win probability</h2>
+      <div id="chartbox"><canvas id="chart" aria-label="Win probability over the game"></canvas><div id="tip"></div></div>
+      <div class="legend"><span><i class="sw"></i>with the film</span><span><i class="sw d"></i>score and clock alone</span></div>
+    </section>
+    <section class="panel card">
+      <h2>Plays <span style="text-transform:none;letter-spacing:0">· shot chance (T2), screen coverage (T3)</span></h2>
+      <div id="feed"></div>
+    </section>
+    <div class="foot" id="foot"></div>
+  </aside>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const cv = $('court'), cx = cv.getContext('2d');
+const PX = 20, X = x => x * PX, Y = y => y * PX;
+let M = null, cur = null, ids = [], chart = [], feed = [], playing = false, shots = {};
+let lag = [], dirty = true, hover = null, VBAR = 0.86;
+
+function fmt(sec) { if (sec == null) return '–'; const m = Math.floor(sec / 60), s = sec - m * 60;
+  return `${m}:${s.toFixed(1).padStart(4, '0')}`; }
+function per(p) { return p <= 4 ? `Q${p}` : `OT${p - 4 > 1 ? p - 4 : ''}`; }
+function pname(id) { const p = M && M.players[id]; return p ? p.name : '' + id; }
+function team(i) { return M ? M.teams[i] : ''; }
+
+const ws = new WebSocket(`ws://${location.host}/ws`);
+const send = o => ws.readyState === 1 && ws.send(JSON.stringify(o));
+ws.onmessage = e => {
+  const m = JSON.parse(e.data);
+  if (m.t === 'hello') hello(m);
+  else if (m.t === 'reset') { chart = m.chart; feed = []; shots = {};
+    for (const ev of m.events) addEvent(ev, false); renderFeed(); dirty = true; }
+  else if (m.t === 'f') frame(m);
+  else if (m.t === 'end') setPlaying(false);
+};
+ws.onclose = () => { $('foot').textContent = 'Disconnected from the engine. Restart it and reload.'; };
+
+function hello(m) {
+  M = m; if (m.vbar) VBAR = m.vbar;
+  $('title').textContent = `${m.teams[1]} at ${m.teams[0]}`;
+  $('homeAb').innerHTML = `<span class="dot" style="background:var(--home)"></span>${m.teams[0]}`;
+  $('awayAb').innerHTML = `${m.teams[1]}<span class="dot" style="background:var(--away)"></span>`;
+  $('wpHomeAb').textContent = m.teams[0]; $('wpAwayAb').textContent = m.teams[1];
+  $('chartTitle').textContent = `${m.teams[0]} win probability`;
+  $('scrub').max = m.n - 1;
+  const sp = $('speed'); sp.innerHTML = '';
+  for (const s of m.speeds) { const o = document.createElement('option'); o.value = s; o.textContent = `${s}×`;
+    if (s === 1) o.selected = true; sp.appendChild(o); }
+  const ps = $('periods'); ps.innerHTML = '';
+  for (const p of m.periods) { const b = document.createElement('button'); b.textContent = per(p.p);
+    b.title = `Jump to the start of ${per(p.p)}`; b.onclick = () => send({cmd: 'seek', i: p.start});
+    ps.appendChild(b); ps.appendChild(document.createTextNode(' ')); }
+}
+
+function frame(m) {
+  cur = m;
+  if (m.ids) ids = m.ids;
+  for (const c of m.c || []) chart.push(c);
+  for (const ev of m.ev || []) addEvent(ev);
+  if (m.sent) { lag.push(Date.now() - m.sent); if (lag.length > 100) lag.shift(); }
+  dirty = true;
+}
+
+function addEvent(ev, render = true) {
+  if (ev.k === 'shot') { shots[ev.id] = ev; feed.unshift(ev); }
+  else if (ev.k === 'result') { const s = shots[ev.id]; if (s) s.made = ev.made; }
+  else if (ev.k === 'score' || ev.k === 'screen') feed.unshift(ev);
+  feed = feed.slice(0, 40);
+  if (render) renderFeed();
+}
+
+function renderFeed() {
+  const el = $('feed'); el.innerHTML = '';
+  for (const ev of feed) {
+    const d = document.createElement('div'); d.className = 'ev';
+    let what = '', val = '';
+    if (ev.k === 'shot') {
+      const r = ev.made === undefined ? '' : ev.made ? ' · <span class="m">made</span>' : ' · <span class="x">missed</span>';
+      what = `${pname(ev.pid)}, ${ev.three ? '3' : '2'}${r}<br><span class="sub">shot${ev.def != null ? `, defender ${ev.def} ft` : ''}</span>`;
+      val = ev.xfg != null ? `${Math.round(ev.xfg * 100)}%` : '';
+    } else if (ev.k === 'score') {
+      what = `<span class="sub">${team(ev.side)} scores</span>`; val = `<span class="sub">+${ev.pts}</span>`;
+    } else if (ev.k === 'screen') {
+      const how = [ev.route && ev.route !== '-' ? `goes ${ev.route}` : '', `screener ${ev.action}s`].filter(Boolean).join(', ');
+      what = `Screen for ${pname(ev.handler)}: <b>${ev.coverage}</b><br><span class="sub">${how}</span>`;
+    }
+    const when = ev.p ? `${per(ev.p)} ${fmt(ev.gc).replace(/\.\d$/, '')}` : '';
+    d.innerHTML = `<span class="t">${when}</span><span>${what}</span><span class="v">${val}</span>`;
+    el.appendChild(d);
+  }
+}
+
+function drawCourt() {
+  cx.fillStyle = css('--court'); cx.fillRect(0, 0, cv.width, cv.height);
+  cx.strokeStyle = css('--court-line'); cx.lineWidth = 3;
+  cx.strokeRect(X(0), Y(0), X(94), Y(50));
+  cx.beginPath(); cx.moveTo(X(47), Y(0)); cx.lineTo(X(47), Y(50)); cx.stroke();
+  cx.beginPath(); cx.arc(X(47), Y(25), X(6), 0, 2 * Math.PI); cx.stroke();
+  for (const side of [0, 1]) {
+    const hx = side ? 88.75 : 5.25, base = side ? 94 : 0, dir = side ? -1 : 1;
+    cx.strokeRect(X(side ? 94 - 19 : 0), Y(17), X(19), Y(16));
+    cx.beginPath(); cx.arc(X(base + dir * 19), Y(25), X(6), 0, 2 * Math.PI); cx.stroke();
+    cx.beginPath(); cx.arc(X(hx), Y(25), X(4), side ? Math.PI / 2 : -Math.PI / 2,
+                           side ? 3 * Math.PI / 2 : Math.PI / 2); cx.stroke();
+    const a = Math.asin(22 / 23.75);
+    cx.beginPath();
+    cx.moveTo(X(base), Y(3)); cx.lineTo(X(base + dir * 14), Y(3));
+    if (side) cx.arc(X(hx), Y(25), X(23.75), Math.PI + a, Math.PI - a, true);
+    else cx.arc(X(hx), Y(25), X(23.75), -a, a, true);
+    cx.moveTo(X(base + dir * 14), Y(47)); cx.lineTo(X(base), Y(47)); cx.stroke();
+    cx.beginPath(); cx.moveTo(X(base + dir * 4), Y(22)); cx.lineTo(X(base + dir * 4), Y(28)); cx.stroke();
+    cx.beginPath(); cx.arc(X(hx), Y(25), X(0.75), 0, 2 * Math.PI); cx.stroke();
+  }
+}
+
+function drawFrame() {
+  drawCourt();
+  if (!cur) return;
+  const xy = cur.xy;
+  for (let j = 0; j < 10; j++) {
+    const x = xy[2 * j], y = xy[2 * j + 1];
+    if (x === -99 || !ids[j]) continue;
+    if (j === cur.h) {  // the ball handler
+      cx.beginPath(); cx.arc(X(x), Y(y), X(2.1), 0, 2 * Math.PI);
+      cx.strokeStyle = css('--ink'); cx.lineWidth = 4; cx.stroke();
+    }
+    cx.beginPath(); cx.arc(X(x), Y(y), X(1.35), 0, 2 * Math.PI);
+    cx.fillStyle = css(j < 5 ? '--home' : '--away'); cx.fill();
+    cx.lineWidth = 3; cx.strokeStyle = css('--panel'); cx.stroke();
+    const p = M && M.players[ids[j]];
+    cx.fillStyle = '#ffffff'; cx.font = `700 ${PX * 1.25}px system-ui, sans-serif`;
+    cx.textAlign = 'center'; cx.textBaseline = 'middle';
+    cx.fillText(p ? p.jersey : '?', X(x), Y(y) + 1);
+  }
+  const [bx, by, bz] = cur.b;
+  if (bx !== -99) {
+    const r = 0.55 + Math.max(0, bz) / 140;
+    cx.beginPath(); cx.arc(X(bx), Y(by), X(r), 0, 2 * Math.PI);
+    cx.fillStyle = css('--ball'); cx.fill(); cx.lineWidth = 3; cx.strokeStyle = '#3a2a10'; cx.stroke();
+  }
+}
+
+function drawPanels() {
+  if (!cur || !M) return;
+  $('homeSc').textContent = cur.s[0]; $('awaySc').textContent = cur.s[1];
+  $('gc').textContent = `${per(cur.p)} ${fmt(cur.gc)}`;
+  $('sc').textContent = cur.sc == null ? 'shot clock off' : `shot clock ${cur.sc.toFixed(1)}`;
+  $('scrub').value = cur.i;
+  const w = cur.wp, b = cur.wpb;
+  $('wpHome').textContent = `${Math.round(w * 100)}%`; $('wpAway').textContent = `${Math.round((1 - w) * 100)}%`;
+  $('spH').style.flex = `${w}`; $('spA').style.flex = `${1 - w}`;
+  const d = Math.round((w - b) * 100);
+  $('wpBase').innerHTML = `Score and clock alone: <b>${Math.round(b * 100)}%</b> ${M.teams[0]}` +
+    (d ? ` · the film moves it <b>${d > 0 ? '+' : ''}${d}</b>` : '');
+  if (cur.o >= 0) {
+    $('epv').textContent = cur.epv.toFixed(2);
+    $('epvWho').innerHTML = `expected points · <b>${team(cur.o)}</b> ball`;
+    $('epvBar').style.width = `${Math.max(0, Math.min(1, cur.epv / 2)) * 100}%`;
+  } else { $('epv').textContent = '–'; $('epvWho').textContent = 'no possession yet'; $('epvBar').style.width = '0'; }
+  $('epvAvg').style.left = `${VBAR / 2 * 100}%`;
+  const lagMed = lag.length ? lag.slice().sort((a, b) => a - b)[lag.length >> 1] : 0;
+  $('foot').innerHTML = `Engine <b>${cur.ms ? cur.ms.p50 : '–'} ms</b> a frame (worst ${cur.ms ? cur.ms.max : '–'} ms) · ` +
+    `to this page <b>${lagMed < 1 ? '<1' : lagMed.toFixed(0)} ms</b> · budget ${M.budget_ms} ms`;
+  const s = feed.find(e => e.k === 'shot' && cur.i - e.i < 50);
+  $('info').innerHTML = s ? `${pname(s.pid)} shoots: <b>${s.xfg != null ? Math.round(s.xfg * 100) + '%' : '–'}</b> chance it goes in` +
+    (s.def != null ? `, closest defender <b>${s.def} ft</b>` : '') : '';
+}
+
+const ch = $('chart'), cc = ch.getContext('2d');
+function chartGeom() {
+  const dpr = window.devicePixelRatio || 1, w = ch.clientWidth, h = ch.clientHeight;
+  if (ch.width !== Math.round(w * dpr)) { ch.width = Math.round(w * dpr); ch.height = Math.round(h * dpr); }
+  const last = chart.length ? chart[chart.length - 1][1] : 0;
+  const tmax = Math.max(2880, Math.ceil((last - 2880) / 300) * 300 + 2880);
+  return { dpr, w, h, l: 30, r: 8, t: 8, b: 18, tmax };
+}
+function drawChart() {
+  const g = chartGeom(), { dpr, w, h, l, r, t, b, tmax } = g;
+  cc.setTransform(dpr, 0, 0, dpr, 0, 0); cc.clearRect(0, 0, w, h);
+  const px = s => l + (w - l - r) * s / tmax, py = p => t + (h - t - b) * (1 - p);
+  cc.font = '11px system-ui, sans-serif'; cc.fillStyle = css('--muted'); cc.textBaseline = 'middle';
+  cc.strokeStyle = css('--grid'); cc.lineWidth = 1;
+  for (const p of [0, 0.25, 0.5, 0.75, 1]) {
+    cc.beginPath(); cc.moveTo(l, py(p)); cc.lineTo(w - r, py(p)); cc.stroke();
+    cc.textAlign = 'right'; cc.fillText(`${p * 100}`, l - 5, py(p));
+  }
+  cc.strokeStyle = css('--faint'); cc.setLineDash([2, 3]);
+  cc.beginPath(); cc.moveTo(l, py(0.5)); cc.lineTo(w - r, py(0.5)); cc.stroke(); cc.setLineDash([]);
+  cc.textAlign = 'center'; cc.textBaseline = 'alphabetic';
+  const marks = [[0, 'Q1'], [720, 'Q2'], [1440, 'Q3'], [2160, 'Q4']];
+  for (let s = 2880; s < tmax; s += 300) marks.push([s, 'OT']);
+  for (const [s, lab] of marks) {
+    cc.strokeStyle = css('--grid'); cc.beginPath(); cc.moveTo(px(s), t); cc.lineTo(px(s), h - b); cc.stroke();
+    cc.fillText(lab, px(s) + (px(s + 360) - px(s)) / 2, h - 4);
+  }
+  const line = (k, color, dash) => {
+    cc.strokeStyle = color; cc.lineWidth = 2; cc.setLineDash(dash); cc.lineJoin = 'round'; cc.beginPath();
+    let prev = null;
+    for (const c of chart) { const x = px(c[1]), y = py(c[k]);
+      if (prev === null || c[1] < prev) cc.moveTo(x, y); else cc.lineTo(x, y); prev = c[1]; }
+    cc.stroke(); cc.setLineDash([]);
+  };
+  line(3, css('--muted'), [5, 4]);
+  line(2, css('--ink'), []);
+  if (hover !== null && chart.length) {
+    const s = (hover - l) / (w - l - r) * tmax;
+    let best = chart[0];
+    for (const c of chart) if (Math.abs(c[1] - s) < Math.abs(best[1] - s)) best = c;
+    const x = px(best[1]);
+    cc.strokeStyle = css('--muted'); cc.lineWidth = 1; cc.beginPath(); cc.moveTo(x, t); cc.lineTo(x, h - b); cc.stroke();
+    for (const [k, col] of [[3, '--muted'], [2, '--ink']]) {
+      cc.beginPath(); cc.arc(x, py(best[k]), 4, 0, 2 * Math.PI); cc.fillStyle = css(col); cc.fill();
+      cc.lineWidth = 2; cc.strokeStyle = css('--panel'); cc.stroke();
+    }
+    const tip = $('tip'), el = best[1];
+    const pp = el < 2880 ? Math.floor(el / 720) + 1 : 5 + Math.floor((el - 2880) / 300);
+    const left = el < 2880 ? 720 - (el % 720) : 300 - ((el - 2880) % 300);
+    tip.innerHTML = `${per(pp)} ${fmt(left)}<br>with the film <b>${Math.round(best[2] * 100)}%</b><br>score and clock <b>${Math.round(best[3] * 100)}%</b>`;
+    tip.style.display = 'block';
+    tip.style.left = `${Math.min(x + 10, w - tip.offsetWidth - 2)}px`; tip.style.top = '6px';
+  } else $('tip').style.display = 'none';
+}
+ch.addEventListener('mousemove', e => { hover = e.offsetX; dirty = true; });
+ch.addEventListener('mouseleave', () => { hover = null; dirty = true; });
+
+function loop() { if (dirty) { drawFrame(); drawPanels(); drawChart(); dirty = false; } requestAnimationFrame(loop); }
+requestAnimationFrame(loop);
+
+function setPlaying(on) { playing = on; $('play').textContent = playing ? 'Pause' : 'Play';
+  $('play').classList.toggle('on', playing); }
+$('play').onclick = () => { setPlaying(!playing); send({cmd: playing ? 'play' : 'pause'}); };
+$('speed').onchange = e => send({cmd: 'speed', v: +e.target.value});
+$('scrub').onchange = e => send({cmd: 'seek', i: +e.target.value});
+$('late').onclick = () => send({cmd: 'seek_clock', p: 4, clock: 120});
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
+  if (e.code === 'Space') { e.preventDefault(); $('play').click(); }
+  if (cur && e.code === 'ArrowRight') send({cmd: 'seek', i: cur.i + 125});
+  if (cur && e.code === 'ArrowLeft') send({cmd: 'seek', i: Math.max(0, cur.i - 125)});
+});
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { dirty = true; });
+window.addEventListener('resize', () => { dirty = true; });
+</script>
+</body>
+</html>
