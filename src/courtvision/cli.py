@@ -384,6 +384,24 @@ def demo_cmd(
         typer.echo(f"published {demo.publish(paths.data / out)}")
 
 
+@app.command("site")
+def site_cmd(
+    db: str = typer.Option("demo/courtvision.duckdb", help="Demo database to export, under data/."),
+    publish: bool = typer.Option(
+        False, "--publish", help="Then build the web app and push it to GitHub Pages (gh-pages)."
+    ),
+) -> None:
+    """Export the demo database (``courtvision demo``) for the web app: content-addressed
+    Parquet files and a manifest -> app/public/data; ``--publish`` builds the app and deploys
+    it with the data."""
+    from courtvision import site
+
+    paths = get_paths()
+    typer.echo(site.build(paths.data / db))
+    if publish:
+        typer.echo(f"published data version {site.publish()} to {site.SITE_URL}")
+
+
 @app.command("daily")
 def daily_cmd(
     dry_run: bool = typer.Option(False, "--dry-run", help="Show today's plan; run nothing."),

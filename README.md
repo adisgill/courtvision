@@ -33,9 +33,9 @@ types, coaching analytics and a player market.
   r ≈ 0), a lineup's own plus-minus predicts its future worse than assuming league
   average, and coach-vs-coach history and positional matchups add nothing out of sample.
   Each is in [`docs/validation.md`](docs/validation.md).
-- **Reproducible:** `courtvision build` rebuilds everything from the raw caches; 119 tests.
+- **Reproducible:** `courtvision build` rebuilds everything from the raw caches; 120 Python tests and the web app's own.
 
-**Stack:** Python 3.12 · DuckDB + Parquet · pandas · Streamlit + Plotly · uv · pytest · ruff
+**Stack:** Python 3.12 · DuckDB + Parquet · pandas · uv · pytest · ruff · web app: React + TypeScript, DuckDB-WASM, Observable Plot (Streamlit + Plotly locally)
 
 <table>
 <tr>
@@ -169,6 +169,22 @@ downloads the `courtvision demo` file from the repo's
 picks up a newer one within 10 minutes of it being uploaded
 (`uv run courtvision demo --publish` builds and uploads it, with the GitHub CLI).
 
+**The web app** (`app/`: React + Vite + TypeScript, Observable Plot, DuckDB-WASM; the same
+design system as the sibling project [pitchvision](https://adisgill.github.io/pitchvision/))
+is a static site: DuckDB runs in the browser and reads the published Parquet files over HTTP,
+so there's no server. `courtvision site` exports the demo database as content-addressed
+Parquet files and a manifest (with the pipeline's SQL macros) to `app/public/data/`;
+`--publish` builds the app and pushes it to the `gh-pages` branch as one orphan commit, for
+GitHub Pages. Live mode needs the Python pipeline and the NBA's live feed (which browsers
+can't call from another site), so it stays in `courtvision app`.
+
+```bash
+uv run courtvision demo && uv run courtvision site   # the data the site reads
+npm --prefix app install
+npm --prefix app run dev                              # http://localhost:5173/courtvision/
+npm --prefix app test                                 # the shot-map binning against the Python
+```
+
 **Every day, unattended.** `courtvision daily` scores the past week's unscored days and
 forecasts right away (so the Upcoming page shows the day's games from the morning on),
 forecasts again 40 minutes before the day's first tip-off with the latest injury report,
@@ -229,6 +245,8 @@ src/courtvision/   library + CLI (`courtvision ...`)
   metrics/         play-by-play parser (possessions, lineups), counts, measures, ratings
   app/             Streamlit visualizer: league, upcoming (scouting report), team, game, player,
                    lineups, plays, coaches, market, live; hexagon shot maps
+  site.py          the web app's data (content-addressed Parquet + manifest) and its deploy
+app/               the web app: React + DuckDB-WASM, a static site (pages, charts, shot maps)
   live.py          live-game ratings from the NBA live feed
   market.py        player value, team budgets and needs, options and risk
   coaching.py      coaching analytics from play-by-play, coach value, coach vs coach

@@ -1,0 +1,92 @@
+// Custom SVG charts Plot doesn't do well: the radar and effect bars with intervals.
+import { ReactNode } from "react";
+import { fmt } from "../lib/format";
+import { useWidth } from "./Figure";
+import { useTip } from "./kit";
+
+export type RadarAxis = { key: string; label: string; group?: string };
+export type RadarSeries = { name: string; color: string; values: Record<string, number | null>; raw?: Record<string, ReactNode> };
+
+/** Percentile radar (0-100 on every axis). Up to 3 series overlaid; hover any axis for values. */
+export function Radar({ axes, series, size = 380 }: { axes: RadarAxis[]; series: RadarSeries[]; size?: number }) {
+  const tip = useTip();
+  const c = size / 2, R = size / 2 - 70, n = axes.length;
+  const ang = (i: number) => -Math.PI / 2 + (2 * Math.PI * i) / n;
+  const pt = (i: number, v: number) => [c + Math.cos(ang(i)) * R * (v / 100), c + Math.sin(ang(i)) * R * (v / 100)];
+  return (
+    <div style={{ maxWidth: size, margin: "0 auto" }}>
+      <svg viewBox={`0 0 ${size} ${size}`} role="img" aria-label="Percentile radar" style={{ width: "100%", height: "auto", overflow: "visible" }}>
+        {[25, 50, 75, 100].map((r) => (
+          <polygon key={r} points={axes.map((_, i) => pt(i, r).join(",")).join(" ")} fill="none"
+                   stroke={r === 50 ? "var(--axis)" : "var(--grid)"} strokeWidth={1} />
+        ))}
+        {axes.map((a, i) => {
+          const [x, y] = pt(i, 100);
+          const [lx, ly] = pt(i, 122);
+          return (
+            <g key={a.key}>
+              <line x1={c} y1={c} x2={x} y2={y} stroke="var(--grid)" />
+              <text x={lx} y={ly} textAnchor={Math.abs(lx - c) < 8 ? "middle" : lx > c ? "start" : "end"} dominantBaseline="middle"
+                    fontSize={11} fill="var(--text-2)">{a.label}</text>
+              <circle cx={x} cy={y} r={14} fill="transparent"
+                      onPointerMove={(e) => tip.show(e, <div>
+                        <div className="muted xs">{a.label}</div>
+                        {series.map((s) => <div key={s.name} className="row" style={{ gap: 6 }}>
+                          <span className="key" style={{ background: s.color }} /><b>{s.values[a.key] == null ? "–" : Math.round(s.values[a.key]!)}</b>
+                          <span className="muted">{s.name}{s.raw?.[a.key] != null ? <> · {s.raw[a.key]}</> : null}</span></div>)}
+                      </div>)} onPointerLeave={tip.hide} />
+            </g>
+          );
+        })}
+        {series.map((s) => {
+          const ptsS = axes.map((a, i) => pt(i, Math.max(0, Math.min(100, s.values[a.key] ?? 0))));
+          return (
+            <g key={s.name}>
+              <polygon points={ptsS.map((p) => p.join(",")).join(" ")} fill={s.color} fillOpacity={series.length > 1 ? 0.12 : 0.18}
+                       stroke={s.color} strokeWidth={2} strokeLinejoin="round" />
+              {ptsS.map(([x, y], i) => <circle key={i} cx={x} cy={y} r={3.5} fill={s.color} stroke="var(--surface)" strokeWidth={2} pointerEvents="none" />)}
+            </g>
+          );
+        })}
+      </svg>
+      {tip.node}
+    </div>
+  );
+}
+
+/** Horizontal diverging bars with error whiskers (effect sizes with intervals). */
+export function EffectBars({ rows, unit = "", height = 28 }: {
+  rows: { label: ReactNode; b: number; se: number; color?: string; note?: ReactNode }[]; unit?: string; height?: number;
+}) {
+  const tip = useTip();
+  const [ref, W] = useWidth<HTMLDivElement>();
+  const lim = Math.max(0.05, ...rows.map((r) => Math.abs(r.b) + 1.96 * r.se));
+  const narrow = W < 560;
+  const lab = Math.min(330, Math.round(W * (narrow ? 0.42 : 0.33))), plotW = W - lab - 24;
+  const x = (v: number) => lab + 12 + plotW / 2 + (v / lim) * (plotW / 2);
+  const fs = narrow ? 11.5 : 13;
+  return (
+    <div ref={ref}>
+      <svg width={W} height={rows.length * height + 24} style={{ display: "block" }} role="img" aria-label="Effect sizes with 95% intervals">
+        <line x1={x(0)} x2={x(0)} y1={0} y2={rows.length * height} stroke="var(--axis)" />
+        {(narrow ? [-lim, lim] : [-lim, -lim / 2, lim / 2, lim]).map((t) => (
+          <text key={t} x={x(t)} y={rows.length * height + 16} textAnchor={t === -lim ? "start" : t === lim ? "end" : "middle"} fontSize={10.5} fill="var(--muted)">{fmt.signed(t, 2)}</text>
+        ))}
+        {rows.map((r, i) => {
+          const y = i * height + height / 2;
+          const c = r.color ?? (r.b >= 0 ? "var(--pos)" : "var(--neg)");
+          return (
+            <g key={i} onPointerMove={(e) => tip.show(e, <><b>{fmt.signed(r.b, 3)}{unit}</b><div className="muted">95% interval {fmt.signed(r.b - 1.96 * r.se, 3)} to {fmt.signed(r.b + 1.96 * r.se, 3)}</div>{r.note}</>)}
+               onPointerLeave={tip.hide}>
+              <rect x={0} y={y - height / 2} width={W} height={height} fill="transparent" />
+              <text x={lab} y={y + 4} textAnchor="end" fontSize={fs} fill="var(--text)">{r.label}</text>
+              <line x1={x(r.b - 1.96 * r.se)} x2={x(r.b + 1.96 * r.se)} y1={y} y2={y} stroke={c} strokeWidth={2} strokeLinecap="round" />
+              <circle cx={x(r.b)} cy={y} r={5.5} fill={c} stroke="var(--surface)" strokeWidth={2} />
+            </g>
+          );
+        })}
+      </svg>
+      {tip.node}
+    </div>
+  );
+}

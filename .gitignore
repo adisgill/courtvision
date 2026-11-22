@@ -25,6 +25,10 @@ dist/
 .coverage
 htmlcov/
 
+# --- node (app) ---
+node_modules/
+*.tsbuildinfo
+
 # --- notebooks / editors / OS ---
 .ipynb_checkpoints/
 .vscode/

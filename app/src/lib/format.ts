@@ -1,0 +1,76 @@
+// Formatting and colour helpers shared by every page.
+
+/** NBA seasons are named by their start year: 2026 -> "2026-27". */
+export const seasonLabel = (s: number) => `${s}-${String((s + 1) % 100).padStart(2, "0")}`;
+
+/** Calendar dates are stored as midnight UTC: show them in UTC so they don't slip a day west of
+ * Greenwich. Real kick-off timestamps (any time-of-day) stay in the viewer's local time. */
+const dateZone = (v: any) => {
+  const d = new Date(v);
+  return d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0 ? "UTC" : undefined;
+};
+const bad = (v: any) => v == null || (typeof v === "number" && !Number.isFinite(v));
+export const fmt = {
+  n: (v: any, d = 0) => (bad(v) ? "–" : Number(v).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d })),
+  pct: (v: any, d = 0) => (bad(v) ? "–" : `${(100 * v).toFixed(d)}%`),
+  signed: (v: any, d = 2) => (bad(v) ? "–" : `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(Number(v)).toFixed(d)}`),
+  usd: (v: any) => {
+    if (bad(v)) return "–";
+    const a = Math.abs(v);
+    return a >= 1e9 ? `$${(v / 1e9).toFixed(2)}B` : a >= 1e6 ? `$${(v / 1e6).toFixed(a >= 1e8 ? 0 : 1)}M` : a >= 1e3 ? `$${Math.round(v / 1e3)}K` : `$${v}`;
+  },
+  date: (v: any) => (v ? new Date(v).toISOString().slice(0, 10) : "–"),
+  day: (v: any) => (v ? new Date(v).toLocaleDateString("en-US", { day: "numeric", month: "short", timeZone: dateZone(v) }) : "–"),
+  dayYear: (v: any) => (v ? new Date(v).toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric", timeZone: dateZone(v) }) : "–"),
+  compact: (v: any) => (bad(v) ? "–" : Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(v)),
+  odds: (p: any) => (bad(p) || p <= 0 ? "–" : (1 / p).toFixed(2)),
+};
+
+/** Resolved value of a CSS custom property (for libraries that need a literal colour). */
+export const css = (name: string) =>
+  getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "#888";
+
+/** Categorical slot colour, 1-based, fixed order. */
+export const slot = (i: number) => css(`--s${((i - 1) % 8) + 1}`);
+
+/** Sequential blue ramp: t in [0, 1] -> colour (via the seven ramp steps). */
+export function seq(t: number) {
+  const steps = [100, 200, 300, 400, 500, 600, 700].map((s) => css(`--seq-${s}`));
+  const x = Math.max(0, Math.min(1, t)) * (steps.length - 1);
+  const i = Math.floor(x);
+  return mix(steps[i], steps[Math.min(i + 1, steps.length - 1)], x - i);
+}
+
+/** Diverging: t in [-1, 1] -> red (neg) ... grey (mid) ... blue (pos). */
+export function div(t: number) {
+  const c = Math.max(-1, Math.min(1, t));
+  return c >= 0 ? mix(css("--mid"), css("--pos"), c) : mix(css("--mid"), css("--neg"), -c);
+}
+
+function hex(c: string): [number, number, number] {
+  const h = c.replace("#", "");
+  const f = h.length === 3 ? h.split("").map((x) => x + x).join("") : h;
+  return [parseInt(f.slice(0, 2), 16), parseInt(f.slice(2, 4), 16), parseInt(f.slice(4, 6), 16)];
+}
+export function mix(a: string, b: string, t: number) {
+  try {
+    const [r1, g1, b1] = hex(a), [r2, g2, b2] = hex(b);
+    const m = (x: number, y: number) => Math.round(x + (y - x) * t);
+    return `rgb(${m(r1, r2)}, ${m(g1, g2)}, ${m(b1, b2)})`;
+  } catch {
+    return a;
+  }
+}
+/** Label ink for text placed inside a filled mark. */
+export function inkOn(c: string) {
+  const m = c.match(/\d+/g);
+  let r = 0, g = 0, b = 0;
+  if (c.startsWith("#")) [r, g, b] = hex(c);
+  else if (m) [r, g, b] = m.map(Number);
+  return 0.299 * r + 0.587 * g + 0.114 * b > 160 ? "#0b0b0b" : "#ffffff";
+}
+
+export const ageOn = (dob: any, at = new Date()) =>
+  dob ? Math.floor((at.getTime() - new Date(dob).getTime()) / 3.15576e10) : null;
+
+export const result = (pf: number, pa: number) => (pf > pa ? "W" : "L");
