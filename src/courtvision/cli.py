@@ -16,6 +16,29 @@ ingest_app = typer.Typer(help="Download sources and load them into DuckDB.", no_
 app.add_typer(ingest_app, name="ingest")
 
 
+def _tracking_app() -> typer.Typer:
+    from courtvision.tracking.cli import app as tracking
+
+    return tracking
+
+
+app.add_typer(_tracking_app(), name="tracking")
+
+
+@ingest_app.command("sportvu")
+def ingest_sportvu(
+    fetch: bool = typer.Option(False, "--fetch", help="download missing archives first (3.6 GB)"),
+    workers: int = typer.Option(6),
+) -> None:
+    """The public 2015-16 SportVU tracking logs -> data/tracking/frames
+    (docs/tracking_spec.md)."""
+    from courtvision.tracking import cli as tracking
+
+    if fetch:
+        tracking.fetch(limit=0)
+    tracking.convert(workers=workers, redo=False)
+
+
 @ingest_app.command("kaggle-download")
 def kaggle_download(
     version: int | None = typer.Option(None, help="Pin a Kaggle dataset version."),
