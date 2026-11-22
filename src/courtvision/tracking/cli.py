@@ -3,6 +3,10 @@
     fetch [--limit N]      download the SportVU archives (all 636 unless --limit)
     convert [--workers N]  archives -> frames Parquet (skips games already converted)
     align [--workers N]    find shots in the tracking, match them to the play-by-play; QA
+    nbacom                 pull NBA.com's 2015-16 tracking stats for those games (known answers)
+    movement               distance, speed, touches, zones, spacing per player-game; vs NBA.com
+    shots                  shot quality at each release; model, out-of-sample report; vs NBA.com
+    replay GAME_ID         a local animated-court page for one game
 
 ``courtvision ingest sportvu [--fetch]`` runs fetch (if asked) and convert.
 """
@@ -59,3 +63,50 @@ def align(workers: int = typer.Option(6)) -> None:
     from courtvision.tracking import align as A
 
     typer.echo(json.dumps(A.run(workers=workers), indent=1))
+
+
+@app.command()
+def nbacom() -> None:
+    """Pull NBA.com's 2015-16 tracking stats for every game date we have (the known answers)."""
+    from courtvision.tracking import nbacom as N
+
+    typer.echo(json.dumps(N.fetch()))
+
+
+@app.command()
+def movement(workers: int = typer.Option(6), check: bool = typer.Option(True)) -> None:
+    """Distance, speed, touches, zones and spacing per player-game; checked against NBA.com."""
+    from courtvision.tracking import movement as M
+
+    typer.echo(json.dumps(M.run(workers=workers)))
+    if check:
+        typer.echo(json.dumps(M.validate(), indent=1))
+
+
+@app.command()
+def shots(workers: int = typer.Option(6), check: bool = typer.Option(True)) -> None:
+    """Shot quality: features at each release, the model and its out-of-sample report."""
+    from courtvision.tracking import shotquality as Q
+
+    typer.echo(json.dumps(Q.build_features(workers=workers)))
+    report = Q.fit()
+    typer.echo(json.dumps({k: report[k] for k in ("models", "gain", "shot_making")}, indent=1))
+    if check:
+        typer.echo(json.dumps(Q.validate(), indent=1))
+
+
+@app.command()
+def replay(
+    game_id: str,
+    period: list[int] = typer.Option(None, help="only these quarters"),
+    open_: bool = typer.Option(False, "--open", help="open it in the browser"),
+) -> None:
+    """Write a local animated-court replay page for one game (never published: raw positions)."""
+    from courtvision.tracking import replay as R
+
+    path = R.build(game_id, periods=period or None)
+    typer.echo(str(path))
+    if open_:
+        import webbrowser
+
+        webbrowser.open(path.resolve().as_uri())

@@ -224,8 +224,8 @@ ball is the bottleneck.
 
 ## 8. Phase T1 results (Nov 22 2026)
 
-`python -m courtvision.tracking fetch | convert | align` (it moves to `courtvision ingest
-sportvu` once the main CLI is free to change).
+`courtvision ingest sportvu [--fetch]` (fetch and convert), then `courtvision tracking align`
+(also `python -m courtvision.tracking ...`).
 
 | Step | Result |
 |---|---|
@@ -265,3 +265,118 @@ are left out, never guessed.
 - The distance check uses jump shots that time and shooter pin to a single tracked shot, so a
   miss and the same player's putback can't be confused, and so layups (logged at 0-2 ft) don't
   count against the tracking.
+
+## 9. Phase T2 results (Nov 22 2026)
+
+`courtvision tracking nbacom | movement | shots | replay GAME_ID`.
+
+**The known answers.** NBA.com's 2015-16 tracking splits are season totals, but a date range of
+one day is one game per team, so asking day by day gives player-game numbers: 85 dates × 8
+splits (speed and distance, touches and possession, catch-and-shoot, pull-ups, and field goals
+by the closest defender's four ranges), 680 cached requests.
+
+### 9.1 Movement vs NBA.com
+
+Settings were chosen on even game ids and scored on odd ones: 5,457 player-games with 10+
+minutes. The tracked running-clock time is 96.6% of NBA.com's minutes (median), so rates are
+compared, and counts are scaled to NBA.com's minutes.
+
+| Check (per player-game, held-out games) | r | Ours vs NBA.com |
+|---|---|---|
+| Average speed | 0.938 | 4.24 vs 4.24 mph (bias 0.0%, mean miss 0.07 mph) |
+| Average speed, summed per player (269 players) | **0.991** | mean miss 0.02 mph |
+| Speed on offense / on defense | 0.888 / 0.854 | bias +0.2% / −0.4% |
+| Distance (our speed × box-score minutes) | 0.998 | −1.7% (box-score minutes are whole numbers) |
+| Touches | 0.962 | −5.1% |
+| Time of possession | 0.996 | −1.6% |
+| Seconds per touch | 0.977 | +3.2% |
+| Dribbles per touch | 0.986 | +4.9% |
+
+The settings the fit half chose:
+- distance counted only while the clock runs;
+- positions smoothed over 5 frames (0.2 s);
+- a touch is at least 15 frames (0.6 s) in hand;
+- possession time is the whole touch, gaps included.
+
+Not checked against NBA.com, because it publishes no equivalent: top speed, distance above
+10 mph, time in zones, and team spacing. As a face check of spacing, the five on offense
+spread widest for Cleveland, Miami and the Clippers (convex hull 565-576 sq ft) and tightest
+for Memphis, the Knicks and Orlando (472-503).
+
+### 9.2 Shots vs NBA.com
+
+We cover the 90.5% of NBA.com's field goals that matched, so shares are compared per
+player-game (players with 8+ field goals by NBA.com's count and 6+ by ours).
+
+| Closest defender | 0-2 ft | 2-4 ft | 4-6 ft | 6+ ft |
+|---|---|---|---|---|
+| NBA.com | 18.8% | 34.3% | 25.5% | 21.4% |
+| Ours | 17.9% | 32.9% | 26.8% | 22.4% |
+
+- Per player-game shares by range: r 0.847 (23,108 cells).
+- Catch-and-shoot share: r 0.939; ours runs 2.6 points high (31.2% vs 28.6%). Counting
+  logged jump shots only barely changes that, so the cause isn't pinned down.
+- Pull-up share: r 0.936 (27.2% vs 27.6%).
+
+### 9.3 Shot quality
+
+Trained on Oct 27-Dec 31 (73,198 shots); judged on Jan 1-23 (22,859 shots it never saw).
+
+| Model | Log loss | Brier | AUC |
+|---|---|---|---|
+| Base rate | 0.6890 | 0.2479 | 0.500 |
+| Location only (distance, angle, three) | 0.6666 | 0.2368 | 0.615 |
+| **Location + tracking** | **0.6502** | **0.2297** | **0.638** |
+| + shooter skill (shrunk, from earlier games) | 0.6496 | 0.2294 | 0.640 |
+
+- **The tracking adds 2.5%** in log loss beyond location (location itself adds 3.3% over the
+  base rate). Most of it comes at the rim, where log loss falls from 0.660 to 0.606.
+  Elsewhere the gain is smaller: 4-14 ft 0.682 → 0.670, long twos 0.677 → 0.674, threes
+  0.650 → 0.647.
+- **Calibrated on the held-out games:** recalibration slope 0.97, intercept 0.00, expected
+  calibration error 0.019 (location only: 0.013).
+- **Make rates by the closest defender move the way they should,** and the model follows
+  them:
+  - at the rim, from 53% (0-2 ft) to 95% (6+ ft);
+  - on threes, from 25% to 39%.
+- The shooter-skill term adds almost nothing (0.6502 → 0.6496).
+- **Shot-making is about as noisy as raw efficiency over half a season.** In odd vs even
+  games (253 players with 150+ shots), points over expected per shot repeat at r 0.27, raw
+  points per shot at 0.28, and expected points per shot at 0.87. The shots a player gets
+  are a stable trait; how far he beats them takes more than half a season to show.
+- The leaders still read right (300+ shots, points over expected per shot): Curry +0.25,
+  Redick +0.25, Durant +0.24, Leonard +0.20, Nowitzki +0.16, Middleton +0.15.
+- Gradient boosting (D5) isn't needed for now: numpy logistic regression is enough for this
+  test.
+
+### 9.4 Replay viewer
+
+`courtvision tracking replay GAME_ID [--period N] [--open]` writes one self-contained page
+(about 5 MB a game) to `data/tracking/replays/`.
+
+What it shows:
+- players with their jersey numbers, and the ball drawn bigger the higher it is;
+- the game and shot clocks, and the score;
+- every matched shot in a list with its chance of going in; clicking one jumps to it;
+- at each release, the shooter ringed and a line to the closest defender.
+
+Playback runs at 0.5-8×, and the page follows the system's light or dark theme. It holds raw
+positions, so it stays local (D1).
+
+*Change, Nov 22 (movement and shots, found while building them):*
+- Speed matches NBA.com as distance **while the clock runs** over running-clock time.
+  NBA.com divides distance by minutes played; counting movement during stoppages too reads
+  0.41 mph high.
+- Raw positions jitter by a few inches, which unsmoothed would add distance nobody ran. A
+  0.2 s moving average matches NBA.com with no bias.
+- Steps implying more than 22 mph are tracking glitches and are dropped. Top speed is held
+  over a full second and divided by at least a frame's time, because a few frames arrive
+  2 ms apart; before that fix, Kevin Love "reached" 75 mph. Top speed is still rough: the
+  highest values (about 20 mph, Kevin Garnett among them) look like glitches just under the
+  cut, and NBA.com publishes nothing to check it against.
+- NBA.com's touches leave out short holds: at least 0.6 s in hand matched best.
+- Ten archives in the source carry a folder prefix in their names, so dates are read with a
+  pattern.
+- The shot model uses nothing after the release: a shot's kind (rim, tip, launch), its
+  flight and its peak are outcomes. A putback is defined from before the release instead
+  (the ball was at the rim within the last 3 s).

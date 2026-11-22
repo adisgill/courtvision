@@ -31,11 +31,18 @@ live mode.)
   lineup and pair projections, coaching (timeouts that stop runs, tempo control, plays out
   of timeouts), availability from the official injury report, and a market with every
   contract against the cap, tax and aprons.
+- **Film and tracking (in progress).** The public 2015-16 SportVU logs (631 games of player
+  and ball positions, 25 a second) turned into shots matched to the play-by-play, movement
+  numbers that agree with NBA.com's own for the same games (average speed r 0.99 by player,
+  touches r 0.96, possession time r 0.996), and a shot-quality model whose tracking inputs
+  (defender distance and closing speed, touch time, dribbles) cut log loss 2.5% beyond shot
+  location on games it never saw. A local replay viewer animates any game. The plan toward a
+  live model driven by game film is in [`docs/tracking_spec.md`](docs/tracking_spec.md).
 - **Negative results kept, not hidden:** lineup "chemistry" doesn't repeat (split-half
   r ≈ 0), a lineup's own plus-minus predicts its future worse than assuming league
   average, and coach-vs-coach history and positional matchups add nothing out of sample.
   Each is in [`docs/validation.md`](docs/validation.md).
-- **Reproducible:** `courtvision build` rebuilds everything from the raw caches; 120 Python tests and the web app's own.
+- **Reproducible:** `courtvision build` rebuilds everything from the raw caches; 136 Python tests and the web app's own.
 
 **Stack:** Python 3.12 · DuckDB + Parquet · pandas · uv · pytest · ruff · web app: React + TypeScript, DuckDB-WASM, Observable Plot (Streamlit + Plotly locally)
 
@@ -132,7 +139,16 @@ league that season.
 7. **You** — optional `data/salary_overrides.csv` to correct or add any deal
    (format: [`docs/salary_overrides.example.csv`](docs/salary_overrides.example.csv)).
 
-No player-tracking data is used; none is public.
+8. **[SportVU tracking logs, 2015-16](https://github.com/linouk23/NBA-Player-Movements)**
+   (636 games from the first half of the season, which NBA.com briefly published in 2016;
+   `courtvision ingest sportvu --fetch`, 3.6 GB): player and ball positions 25 times a
+   second, for the film and tracking module only. The collection has no license, so the
+   positions stay on your machine and only derived numbers (movement summaries, shot
+   quality) are ever published. NBA.com's own 2015-16 tracking stats
+   (`courtvision tracking nbacom`, through `nba_api`) are the known answers they're checked
+   against.
+
+The rest of courtvision uses no player-tracking data.
 
 ## Quick start
 
@@ -163,6 +179,18 @@ uv run courtvision daily                          # the whole day unattended (be
 ```
 
 `uv run courtvision build` reruns the whole chain from the raw caches.
+
+**Film and tracking** (optional, separate from `build`; see
+[`docs/tracking_spec.md`](docs/tracking_spec.md)):
+
+```bash
+uv run courtvision ingest sportvu --fetch              # 2015-16 SportVU logs -> Parquet (3.6 GB)
+uv run courtvision tracking align                      # shots matched to the play-by-play (~4 min)
+uv run courtvision tracking nbacom                     # NBA.com's tracking stats, those games (~15 min cold)
+uv run courtvision tracking movement                   # speed, distance, touches, spacing; vs NBA.com (~6 min)
+uv run courtvision tracking shots                      # shot quality and its out-of-sample report (~1 min)
+uv run courtvision tracking replay 0021500493 --open   # an animated court for one game (stays local)
+```
 
 The [Streamlit app](https://courtvis.streamlit.app/) runs the root
 `streamlit_app.py` on Streamlit Community Cloud. With no database of its own, it
