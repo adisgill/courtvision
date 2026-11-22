@@ -33,7 +33,7 @@ types, coaching analytics and a player market.
   r ≈ 0), a lineup's own plus-minus predicts its future worse than assuming league
   average, and coach-vs-coach history and positional matchups add nothing out of sample.
   Each is in [`docs/validation.md`](docs/validation.md).
-- **Reproducible:** `courtvision build` rebuilds everything from the raw caches; 118 tests.
+- **Reproducible:** `courtvision build` rebuilds everything from the raw caches; 119 tests.
 
 **Stack:** Python 3.12 · DuckDB + Parquet · pandas · Streamlit + Plotly · uv · pytest · ruff
 
@@ -215,7 +215,7 @@ order by defense_rating desc;
 | `lineups.*` | `team_stints` (every stint with both fives and the players' expectation), `units` (five-man lineups: raw, expected, projected net, starts, clutch), `pairs`, `tests` (does lineup chemistry repeat; what predicts a lineup), `league` | `lineups` |
 | `plays.*` | `shots` (every attempt since 2015-16 with its play type), `league`, `team` (mix and efficiency, offense and defense), `player`, `assists` (passer → scorer), `turnovers` (by kind), `reliability`, `matchup_test` | `plays` |
 | `injury.*` | `reports` (every loaded report: game, team, player, status, reason) | `ingest injuries` |
-| `forecast.*` | `ledger_games`, `ledger_players`, `ledger_availability` (every prediction as made, append-only), `scorecard_games`, `scorecard_players` (predictions vs results), `availability` (each upcoming game's listed players, what each absence costs), `games` (margin, win chance, rest), `team` (predicted dimensions), `players` (predicted ratings), `player_lines` (stat lines with 80% ranges), `wf_*` (walk-forward predictions and evaluation), `margin_model`, `margin_range` (how the margin range follows the season), `backtest_*` | `walkforward`, `forecast` |
+| `forecast.*` | `ledger_games`, `ledger_players`, `ledger_availability` (every prediction as made, append-only), `scorecard_games`, `scorecard_players` (predictions vs results), `availability` (each upcoming game's listed players, what each absence costs), `games` (margin, win chance, rest), `team` (predicted dimensions), `players` (predicted ratings), `player_lines` (stat lines with 80% ranges), `wf_*` (walk-forward predictions and evaluation), `margin_model`, `margin_range` (how the margin range follows the season), `minutes_share` (how an absent player's minutes are shared out), `backtest_*` | `walkforward`, `forecast` |
 
 Parquet under `data/parquet/` is the durable copy; the DuckDB file holds views
 over it and rebuilds in seconds. Raw downloads and every nba_api response

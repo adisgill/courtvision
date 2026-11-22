@@ -1049,7 +1049,41 @@ plays: error 5.5. A projection is conditional on playing: there is no injury fee
    alone: 10.6% / 10.0%). Ranges are 4% (points) to 19% (steals + blocks) wider on average;
    a star's points range is narrower than before, a bench player's upper side longer. On the
    three scored nights the new ranges leaned the other way (12.7% below, 7.8% above, 376
-   player-games): too few to overturn a choice made on 118,000.
+   player-games): too few to overturn a choice made on 118,000. *(It held up over the next
+   week: fixed Nov 22, below.)*
+
+*Change, Nov 22 (after a week of scored games): absent players' minutes are shared by room,
+and the player ranges are fitted on lines made that way.* Over Nov 15-21 (1,102 player-games)
+the player ranges held 79.5% but missed low: 13.0% below, 7.5% above. Two causes:
+
+1. **Starters got too much of an absent teammate's minutes.** Out players' minutes went to
+   teammates in proportion to their own, so a 34-minute starter got almost three times what
+   a 12-minute reserve got. Live, players expected for 32+ minutes then played 3.2 fewer
+   than projected, and 17.7% of their stats fell below the range. In past seasons (the
+   walk-forward's expected players who sat, 2021-22 to 2025-26), when a rotation player sat
+   each teammate gained about the same 2-4 minutes whatever his role, players already near
+   36+ gained least, and big absences were only partly absorbed by the expected rotation
+   (the rest went to players outside it). Proportional sharing was worse than not sharing
+   at all: minutes squared error on 2023-24 to 2025-26 70.0, against 51.0 without sharing.
+   Now (`share_minutes`, `forecast.minutes_share`) the share `absorb` of each absent
+   player's minutes goes to the teammates expected to play, each weighted by
+   max(`cap` − his minutes, 0)^`power`, fitted on 2021-22 and 2022-23 by squared error:
+   30%, 48, 0.75. Check seasons: 44.2. A questionable player's missing minutes (the rest of
+   his chance) are shared the same way, split among the others only, so his own line (if he
+   plays) gains only from teammates' absences and the team's expected total is exact.
+2. **The ranges were fitted on lines that ran low.** The walk-forward has no injury report:
+   teammates of players who sat were projected their usual minutes, and points ran 1.1 low
+   on average; live lines (with the report) ran 0.3 high, so the ranges sat high. The
+   walk-forward now also makes each line with who sat known and their minutes shared by the
+   rule (`who_sat_known_mae`; the stat lines scale with minutes), and the ranges are fitted
+   on those. Check seasons: 79-80% inside, 10-11% on each side.
+
+Re-predicting Nov 15-21 with the injury statuses logged then: 9.4% below and 10.7% above
+(13.0% / 7.5% as logged), 79.9% inside, ranges 7% narrower, every stat's error a little
+lower (points 4.57 → 4.54, rebounds 1.93 → 1.88), and players expected for 32+ minutes
+played 1.3 more than projected instead of 3.2 fewer. Game margins barely move (the margin
+model was fitted without injury information, and the roster view's weight damps it): the
+same error, 36 winners instead of 37.
 
 ## 17. Play types (2026-11-12)
 
@@ -1198,8 +1232,8 @@ Teams that haven't filed are kept as "not yet submitted".
 for that date; for a later date the report doesn't reach yet, only players listed Out are
 carried (`carried`; day-to-day statuses aren't); a report more than two days older than a
 game is ignored. Out and Doubtful players leave the expected minutes, and their minutes go
-to teammates in proportion to their own (the team total is unchanged), which moves the
-roster view, the margin, the stat lines and the lineups. Questionable and Probable players
+to teammates (in proportion to their own until Nov 22; since then by room, section 16),
+which moves the roster view, the margin, the stat lines and the lineups. Questionable and Probable players
 stay, tagged (Q) / (P) on their stat lines; since Nov 15 a Questionable player counts by
 his chance of playing (section 16). Each absence's cost is shown: his expected minutes had
 he played times his impact.

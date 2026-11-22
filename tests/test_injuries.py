@@ -95,43 +95,50 @@ def test_statuses_for_games_and_carrying():
     assert a[a.game_id == "g3"].empty  # a week later the report is too old to use
 
 
-def test_ruled_out_minutes_go_to_teammates():
+def _rotation() -> pd.DataFrame:
     rows = []
     for g in range(6):
         for pid, m in ((1, 34), (2, 30), (3, 28), (4, 26), (5, 24), (6, 20), (7, 18), (8, 12)):
             rows.append({"season": 2026, "game_id": f"g{g}", "team_id": 1, "person_id": pid,
                          "minutes": m, "game_date": pd.Timestamp("2026-11-01")
                          + pd.Timedelta(days=g)})  # fmt: skip
-    p = pd.DataFrame(rows)
-    cut = pd.Timestamp("2026-11-10")
-    base = expected_minutes(p, cut, 2026)
-    out = expected_minutes(p, cut, 2026, unavailable={1})
-    assert 1 not in set(out.person_id)
-    assert out.exp_minutes.sum() == pytest.approx(base.exp_minutes.sum())  # nothing lost
-    b = base.set_index("person_id").exp_minutes
-    o = out.set_index("person_id").exp_minutes
-    assert np.allclose(o / b.loc[o.index], o.iloc[0] / b.loc[o.index[0]])  # proportional
+    return pd.DataFrame(rows)
+
+
+RULE = {"absorb": 0.5, "cap": 40, "power": 1.0}
+
+
+def test_ruled_out_minutes_go_mostly_to_players_with_room():
+    p, cut = _rotation(), pd.Timestamp("2026-11-10")
+    b = expected_minutes(p, cut, 2026).set_index("person_id").exp_minutes
+    o = expected_minutes(p, cut, 2026, unavailable={1}, share=RULE).set_index("person_id")
+    assert 1 not in o.index
+    # half his minutes go to the expected rotation (the rest to players outside it), each
+    # teammate's share in proportion to his room under 40 minutes
+    gain = o.exp_minutes - b.loc[o.index]
+    assert gain.sum() == pytest.approx(0.5 * b.loc[1])
+    room = 40 - b.loc[o.index]
+    assert np.allclose(gain, 0.5 * b.loc[1] * room / room.sum())
+    assert gain.loc[8] > gain.loc[2]  # the 12-minute reserve gets more than the 30-minute starter
+    # without a rule given: the default (30% absorbed)
+    d = expected_minutes(p, cut, 2026, unavailable={1}).exp_minutes.sum()
+    assert d == pytest.approx(b.sum() - (1 - 0.3) * b.loc[1])
 
 
 def test_questionable_minutes_split_by_chance_of_playing():
-    rows = []
-    for g in range(6):
-        for pid, m in ((1, 34), (2, 30), (3, 28), (4, 26), (5, 24), (6, 20), (7, 18), (8, 12)):
-            rows.append({"season": 2026, "game_id": f"g{g}", "team_id": 1, "person_id": pid,
-                         "minutes": m, "game_date": pd.Timestamp("2026-11-01")
-                         + pd.Timedelta(days=g)})  # fmt: skip
-    p = pd.DataFrame(rows)
-    cut = pd.Timestamp("2026-11-10")
+    p, cut = _rotation(), pd.Timestamp("2026-11-10")
     base = expected_minutes(p, cut, 2026).set_index("person_id")
-    q = expected_minutes(p, cut, 2026, maybe={1: 0.5}).set_index("person_id")
+    q = expected_minutes(p, cut, 2026, maybe={1: 0.5}, share=RULE).set_index("person_id")
     assert q.loc[1, "p_play"] == 0.5 and (q.drop(1).p_play == 1).all()
-    assert q.loc[1, "exp_minutes"] > base.loc[1, "exp_minutes"] * 0.99  # if he plays: as usual
+    # if he plays, his line is his usual: nobody else is missing
+    assert q.loc[1, "exp_minutes"] == pytest.approx(base.loc[1, "exp_minutes"])
     assert (q.drop(1).exp_minutes > base.drop(1).exp_minutes).all()  # teammates get some
-    # the team's expected total is unchanged: his half-chance of sitting is shared out
-    assert (q.exp_minutes * q.p_play).sum() == pytest.approx(base.exp_minutes.sum())
+    # expected total: half his chance of sitting, half of that absorbed by the rotation
+    lost = (1 - 0.5) * 0.5 * base.loc[1, "exp_minutes"]
+    assert (q.exp_minutes * q.p_play).sum() == pytest.approx(base.exp_minutes.sum() - lost)
     # a sure thing either way is the same as no listing, or ruled out
-    assert np.allclose(expected_minutes(p, cut, 2026, maybe={1: 1.0}).exp_minutes,
+    assert np.allclose(expected_minutes(p, cut, 2026, maybe={1: 1.0}, share=RULE).exp_minutes,
                        base.exp_minutes)  # fmt: skip
-    gone = expected_minutes(p, cut, 2026, maybe={1: 0.0})
-    out = expected_minutes(p, cut, 2026, unavailable={1})
+    gone = expected_minutes(p, cut, 2026, maybe={1: 0.0}, share=RULE)
+    out = expected_minutes(p, cut, 2026, unavailable={1}, share=RULE)
     assert np.allclose(gone.exp_minutes, out.exp_minutes) and 1 not in set(gone.person_id)

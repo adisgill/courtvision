@@ -99,3 +99,22 @@ def test_two_sided_player_ranges_split_the_misses():
     # a database from before: one symmetric width per stat
     old = range_params({"spread_pts": 2.0}, "pts")
     assert old["lo_c"] == old["hi_c"] == pytest.approx(1.2816 * 2.0) and old["hi_a"] == 0.5
+
+
+def test_minutes_share_fit_recovers_how_absences_were_shared():
+    from courtvision.walkforward import fit_minutes_share, share_minutes
+
+    rng = np.random.default_rng(2)
+    rows = []
+    for g in range(3000):
+        exp = rng.uniform(4, 38, 10)
+        rows += [{"g": g, "exp_minutes": e} for e in exp]
+    pl = pd.DataFrame(rows)
+    pl["p"] = (rng.random(len(pl)) > 0.15).astype(float)  # about one in seven sits
+    true = {"absorb": 0.5, "cap": 40, "power": 1.0}
+    want = share_minutes(pl.exp_minutes, pl.p, pl.g, true)
+    pl["minutes"] = np.where(pl.p > 0, want + rng.normal(0, 3, len(pl)), 0.0)
+    rule = fit_minutes_share(pl[["g", "exp_minutes", "minutes"]])
+    assert rule["absorb"] in (0.4, 0.5, 0.6) and rule["cap"] in (38, 40, 42)
+    got = share_minutes(pl.exp_minutes, pl.p, pl.g, rule)[pl.p > 0]
+    assert np.abs(got - want[pl.p > 0]).mean() < 0.5

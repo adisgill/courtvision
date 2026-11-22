@@ -14,6 +14,8 @@ happened, season after season. ``courtvision walkforward`` writes schema ``forec
                     widths (``model = 'player intervals'``), for live predictions
 * ``margin_range``  how much the margin's 80% range listens to the season's own misses
                     (``prior_games``), and its coverage on the check seasons
+* ``minutes_share`` how an absent player's minutes are shared out (absorb, cap, power), and
+                    the check seasons' minutes error against no sharing and proportional
 * ``wf_residuals``  each game's margin against the base prediction, by coach
 
 ``live`` applies the chosen model and the player lines to upcoming games (used by
@@ -36,9 +38,12 @@ measured, not assumed.
 scaled down only past 250); per-minute rates for points, rebounds, assists, threes,
 steals + blocks and turnovers from recent games (shrunk toward last season); x expected
 pace / team pace; x the opponent's allowance to the player's position group (guards,
-wings, bigs) for that stat, shrunk toward league average. 80% ranges: 10% of outcomes
-below and 10% above, each side c * expected^a (counts have a long upper tail, so the upper
-side is longer), fitted on the first two evaluation seasons and checked on the rest.
+wings, bigs) for that stat, shrunk toward league average. An absent player's minutes:
+the share ``absorb`` goes to the teammates expected to play, more to those with more room
+under ``cap`` (``share_minutes``), fitted on the first two evaluation seasons with who sat
+known (live, the injury report says). 80% ranges: 10% of outcomes below and 10% above,
+each side c * expected^a (counts have a long upper tail, so the upper side is longer),
+fitted on the first two evaluation seasons' lines made that way and checked on the rest.
 
 **Margin range:** the 80% range of the final margin is -/+ 1.28 sigma, with sigma the
 backtest spread updated with the season's own misses so far (the backtest counts as
@@ -48,6 +53,7 @@ backtest sigma: updating it didn't improve them in any season.
 
 from __future__ import annotations
 
+import itertools
 import logging
 import math
 
@@ -87,6 +93,12 @@ STYLE = {  # team rate, the opponent's rate allowed: (numerator, denominator)
 Z80 = 1.2816  # an 80% range is the expected value -/+ Z80 sigma
 RANGE_PRIORS = [800, 400, 200, 100, 50, 25]  # games of prior on the margin range's spread
 RANGE_POWERS = [0.0, 0.2, 0.35, 0.5, 0.65, 0.8]  # how a player range's width grows
+# sharing an absent player's minutes (``share_minutes``): grids for the fit, and the rule
+# fitted on 2021-22 and 2022-23 (used when ``forecast.minutes_share`` isn't built)
+SHARE_ABSORB = [0.1, 0.2, 0.25, 0.3, 0.35, 0.4, 0.5, 0.6, 0.8, 1.0]
+SHARE_CAPS = [38, 40, 42, 44, 48]
+SHARE_POWERS = [0.0, 0.25, 0.5, 0.75, 1.0]
+SHARE_DEFAULT = {"absorb": 0.3, "cap": 48, "power": 0.75}
 
 
 # ---- data ---------------------------------------------------------------------------------
@@ -162,16 +174,47 @@ def style_rates(teams: pd.DataFrame, before: pd.Timestamp, season: int) -> pd.Da
     return pd.DataFrame(out)
 
 
+def share_minutes(exp: pd.Series, p_play: pd.Series, team: pd.Series, rule: dict) -> pd.Series:
+    """Minutes when he plays, once teammates' absences are shared out: of the minutes the
+    absent (``p_play`` 0) and the doubtful (the rest of their chance) were expected to play,
+    the share ``absorb`` goes to the teammates expected to play, each weighted by his room
+    for more, max(cap - his minutes, 0)^power. The rest goes to players outside the expected
+    rotation. Each player's missing minutes are split among the others only, so a doubtful
+    player's own line (if he plays) gains only from his teammates' absences.
+    ``rule``: absorb, cap, power (``forecast.minutes_share``)."""
+    room = np.maximum(rule["cap"] - exp, 0.0) ** rule["power"]
+    missing = exp * (1 - p_play)
+    others = (room * p_play).groupby(team).transform("sum") - room * p_play  # room but his
+    per_room = (missing / others.where(others > 0, np.inf)).fillna(0.0)
+    return exp + rule["absorb"] * room * (per_room.groupby(team).transform("sum") - per_room)
+
+
+def fit_minutes_share(pl: pd.DataFrame) -> dict:
+    """The sharing rule that best predicts the minutes of players who played (least squared
+    error), from team-games of expected players (``pl``: g = team-game, exp_minutes,
+    minutes, 0 for those who sat)."""
+    present = pl[pl.minutes > 0]
+    p = (pl.minutes > 0).astype(float)
+    best = None
+    for absorb, cap, power in itertools.product(SHARE_ABSORB, SHARE_CAPS, SHARE_POWERS):
+        rule = {"absorb": absorb, "cap": cap, "power": power}
+        new = share_minutes(pl.exp_minutes, p, pl.g, rule)[present.index]
+        err = float(((present.minutes - new) ** 2).mean())
+        if best is None or err < best[0]:
+            best = (err, rule)
+    return best[1]
+
+
 def expected_minutes(players: pd.DataFrame, before: pd.Timestamp, season: int,
-                     unavailable: set | None = None,
-                     maybe: dict | None = None) -> pd.DataFrame:  # fmt: skip
+                     unavailable: set | None = None, maybe: dict | None = None,
+                     share: dict | None = None) -> pd.DataFrame:  # fmt: skip
     """Expected minutes per player for his team's next game, if he plays: his recent games
     weighted (half-life ``MINUTES_HALF_LIFE`` team games), for players in one of the
     team's last three games; a team's total is scaled down only past 250. Players in
-    ``unavailable`` (ruled out on the injury report) are dropped and their minutes go to
-    their teammates in proportion to their own. A player in ``maybe`` (questionable) plays
-    with the chance given (``p_play``): the minutes he may not play go to his teammates
-    the same way, and his own stay what he gets when he plays."""
+    ``unavailable`` (ruled out on the injury report) are dropped; a player in ``maybe``
+    (questionable) plays with the chance given (``p_play``), and his own minutes stay what
+    he gets when he plays. The minutes they may not play are shared out by ``share``
+    (``share_minutes``; ``SHARE_DEFAULT`` without one)."""
     p = players[(players.season == season) & (players.game_date < before)]
     if p.empty:  # season opener: last season's final weeks
         p = players[(players.season == season - 1) & (players.game_date < before)]
@@ -194,19 +237,16 @@ def expected_minutes(players: pd.DataFrame, before: pd.Timestamp, season: int,
     recent = full[full.rk <= 3].groupby(["person_id", "team_id"]).minutes.sum()
     out = (agg.wm / agg.w).rename("exp_minutes").reset_index()
     out = out[out.set_index(["person_id", "team_id"]).index.isin(recent[recent > 0].index)]
+    # a returning player squeezes the others: scale down only past a full game
+    tot = out.groupby("team_id").exp_minutes.transform("sum")
+    out["exp_minutes"] = out.exp_minutes * np.minimum(1.0, 250 / tot.where(tot > 0, 1))
     out["p_play"] = out.person_id.map(maybe or {}).fillna(1.0).astype(float)
     if unavailable:
         out.loc[out.person_id.isin(unavailable), "p_play"] = 0.0
     if unavailable or maybe:
-        # the team's total is unchanged: the minutes expected to go unplayed are shared out
-        # in proportion to the minutes expected to be played
-        before_total = out.groupby("team_id").exp_minutes.transform("sum")
-        played = (out.exp_minutes * out.p_play).groupby(out.team_id).transform("sum")
-        out["exp_minutes"] = out.exp_minutes * before_total / played.where(played > 0, 1)
+        out["exp_minutes"] = share_minutes(out.exp_minutes, out.p_play, out.team_id,
+                                           share or SHARE_DEFAULT)  # fmt: skip
         out = out[out.p_play > 0]
-    # a returning player squeezes the others: scale down only past a full game
-    tot = (out.exp_minutes * out.p_play).groupby(out.team_id).transform("sum")
-    out["exp_minutes"] = out.exp_minutes * np.minimum(1.0, 250 / tot.where(tot > 0, 1))
     return out
 
 
@@ -222,7 +262,7 @@ def stage1(data: dict, games: pd.DataFrame, cutoff: pd.Timestamp, season: int,
     imp = data["impact"][data["impact"].season == season - 1].set_index("person_id").impact
     hca = data["impact"][data["impact"].season == season - 1].home_court.mean()
     mins = expected_minutes(data["players"], cutoff, season, data.get("unavailable"),
-                            data.get("maybe"))  # fmt: skip
+                            data.get("maybe"), data.get("share"))  # fmt: skip
     mins["impact"] = mins.person_id.map(imp).fillna(data["newcomer"])
     roster = (mins.impact * mins.exp_minutes * mins.p_play / 48).groupby(mins.team_id).sum()
     played = data.get("oracle")  # availability test only: who actually played each game
@@ -288,7 +328,8 @@ def player_lines(data: dict, games: pd.DataFrame, cutoff: pd.Timestamp, season: 
     p = data["players"]
     cur = p[(p.season == season) & (p.game_date < cutoff)]
     prev = p[p.season == season - 1]
-    mins = expected_minutes(p, cutoff, season, data.get("unavailable"), data.get("maybe"))
+    mins = expected_minutes(p, cutoff, season, data.get("unavailable"), data.get("maybe"),
+                            data.get("share"))  # fmt: skip
     if mins.empty:
         return pd.DataFrame()
     base = prev if prev.minutes.sum() > 0 else cur
@@ -545,8 +586,33 @@ def run(con: duckdb.DuckDBPyConnection) -> dict:
             lambda v: v.shift().expanding().mean())  # fmt: skip
     pl = pl.merge(pg[["game_id", "person_id", *[f"{s}_avg" for s in STATS]]],
                   on=["game_id", "person_id"], how="left")  # fmt: skip
+    pl = pl.merge(st[["game_id", "season"]], on="game_id")
+    # live, the injury report says who sits and their minutes are shared out: here, who sat
+    # each game is known and the sharing rule is fitted on the first two evaluation seasons;
+    # stat lines scale with minutes, and the 80% ranges are fitted on lines made this way
+    pl["g"] = pl.game_id + "_" + pl.team_id.astype(str)
+    sat = (pl.minutes > 0).astype(float)
+    fit_pl = pl.season.isin(EVAL_SEASONS[:2])
+    share = fit_minutes_share(pl[fit_pl])
+    pl["exp_minutes_known"] = share_minutes(pl.exp_minutes, sat, pl.g, share)
+    ratio = pl.exp_minutes_known / pl.exp_minutes.where(pl.exp_minutes > 0, 1)
+    for s in STATS:
+        pl[f"{s}_known"] = pl[s] * ratio
+    chk_pl = pl[~fit_pl & (pl.minutes > 0)]
+    whole = pl[~fit_pl].groupby("g").exp_minutes.transform("sum")
+    here = (pl.exp_minutes * sat)[~fit_pl].groupby(pl.g[~fit_pl]).transform("sum")
+    prop = (pl.exp_minutes[~fit_pl] * whole / here.where(here > 0, 1))[chk_pl.index]
+    row = dict(share)  # check-season errors of minutes when he plays, by how absences are shared
+    for k, v in (("none", chk_pl.exp_minutes), ("proportional", prop),
+                 ("rule", chk_pl.exp_minutes_known)):  # fmt: skip
+        e = chk_pl.minutes - v
+        row[f"mse_{k}"], row[f"mae_{k}"] = float((e**2).mean()), float(e.abs().mean())
+    minutes_share = pd.DataFrame([row])
+    log.info("minutes share: %s; check-season minutes MSE none %.1f, proportional %.1f, "
+             "rule %.1f", share, minutes_share.mse_none[0], minutes_share.mse_proportional[0],
+             minutes_share.mse_rule[0])  # fmt: skip
     pev, spread = [], {}
-    played = pl[pl.minutes > 0].merge(st[["game_id", "season"]], on="game_id")
+    played = pl[pl.minutes > 0]
     fit_on = played.season.isin(EVAL_SEASONS[:2])  # interval widths: first two seasons
     check = ~fit_on  # coverage: the seasons after
     for s in STATS:
@@ -554,13 +620,15 @@ def run(con: duckdb.DuckDBPyConnection) -> dict:
         b = played[f"{s}_avg"].fillna(played[f"{s}_base"])
         # each side of the range set so 10% of the fit seasons' outcomes fall below it and
         # 10% above (counts have a long upper tail: a symmetric range had 4-5% below and
-        # 15-16% above), then tested on the later seasons
-        spread[s] = fit_player_range(played[s][fit_on], played[f"{s}_act"][fit_on])
-        lo, hi = player_bounds(played[s], spread[s])
+        # 15-16% above), on lines made as live makes them, then tested on the later seasons
+        k_ = played[f"{s}_known"]
+        spread[s] = fit_player_range(k_[fit_on], played[f"{s}_act"][fit_on])
+        lo, hi = player_bounds(k_, spread[s])
         below, above = played[f"{s}_act"] < lo, played[f"{s}_act"] > hi
         inside = ~below & ~above
         pev.append({"stat": s, "player_games": len(played),
                     "model_mae": float(err.abs().mean()),
+                    "who_sat_known_mae": float((k_ - played[f"{s}_act"]).abs().mean()),
                     "no_matchup_mae": float((played[f"{s}_base"] * played.pace_factor
                                              - played[f"{s}_act"]).abs().mean()),
                     "form_only_mae": float((played[f"{s}_base"] - played[f"{s}_act"]).abs().mean()),
@@ -571,6 +639,8 @@ def run(con: duckdb.DuckDBPyConnection) -> dict:
                     **spread[s]})  # fmt: skip
     pev.append({"stat": "minutes (when he plays)", "player_games": len(played),
                 "model_mae": float((played.exp_minutes - played.minutes).abs().mean()),
+                "who_sat_known_mae": float((played.exp_minutes_known
+                                            - played.minutes).abs().mean()),
                 "season_avg_mae": float("nan"),
                 "corr": float(played.exp_minutes.corr(played.minutes)),
                 "no_matchup_mae": float("nan"), "form_only_mae": float("nan")})  # fmt: skip
@@ -612,11 +682,13 @@ def run(con: duckdb.DuckDBPyConnection) -> dict:
     resid_df = st[["game_id", "season", "game_date", "home_team_id", "away_team_id",
                    "coach_h", "coach_a", "margin", "base_pred"]].copy()  # fmt: skip
     con.execute("create schema if not exists forecast")
-    keep_pl = ["game_id", "team_id", "opp_id", "person_id", "grp", "exp_minutes", "minutes",
-               *STATS, *[f"{s}_act" for s in STATS], *[f"{s}_avg" for s in STATS]]  # fmt: skip
+    keep_pl = ["game_id", "team_id", "opp_id", "person_id", "grp", "exp_minutes",
+               "exp_minutes_known", "minutes", *STATS, *[f"{s}_act" for s in STATS],
+               *[f"{s}_avg" for s in STATS]]  # fmt: skip
     for name, df in (("wf_games", st), ("wf_eval", ev), ("wf_calibration", cal),
                      ("wf_players", pl[keep_pl]), ("wf_player_eval", pev),
                      ("margin_model", margin_model), ("margin_range", margin_range),
+                     ("minutes_share", minutes_share),
                      ("wf_residuals", resid_df)):  # fmt: skip
         con.register("tmp_df", df)
         con.execute(f"create or replace table forecast.{name} as select * from tmp_df")
@@ -683,6 +755,9 @@ def live(con: duckdb.DuckDBPyConnection, season: int, games: pd.DataFrame,
     data["rest"] = schedule_rest(con, games)
     data["unavailable"] = set(unavailable or ())
     data["maybe"] = dict(maybe or {})
+    if _has_table(con, "forecast", "minutes_share"):  # how absences' minutes are shared
+        r = con.execute("select absorb, cap, power from forecast.minutes_share").fetchall()[0]
+        data["share"] = {"absorb": r[0], "cap": r[1], "power": r[2]}
     data["coach_idx"] = pd.Series(dtype=object)
     g = games[["game_id", "game_date", "home_team_id", "away_team_id"]].copy()
     g["game_date"] = pd.to_datetime(g.game_date)

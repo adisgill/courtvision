@@ -644,15 +644,27 @@ def walkforward_sections(con) -> list[str]:
         "",
         _md_table(cal),
         "",
-        "Player stat lines (player-games played): error of the model, the model without the "
-        "positional matchup, without matchup or pace, and the season-to-date average; "
-        "correlation with the outcome; share of outcomes inside the 80% range in 2023-24 to "
-        "2025-26, below it and above it (fitted on 2021-22 and 2022-23 so 10% fall on each "
-        "side); each side's width is `c` x expected^`a` (`lo_*`, `hi_*`).",
+        "Player stat lines (player-games played): error of the model, of the model with who "
+        "sat each game known and their minutes shared out as live does (`who_sat_known_mae`; "
+        "live, the injury report says who sits), the model without the positional matchup, "
+        "without matchup or pace, and the season-to-date average; correlation with the "
+        "outcome; share of outcomes inside the 80% range in 2023-24 to 2025-26, below it and "
+        "above it (fitted on 2021-22 and 2022-23's lines with who sat known, so 10% fall on "
+        "each side); each side's width is `c` x expected^`a` (`lo_*`, `hi_*`).",
         "",
         _md_table(pe, ".3f"),
         "",
     ]
+    if _has_table(con, "forecast", "minutes_share"):
+        ms = con.sql("select * from forecast.minutes_share").df().iloc[0]
+        parts += [
+            f"An absent player's minutes: {ms.absorb:.0%} go to the teammates expected to "
+            f"play, each weighted by max({int(ms.cap)} - his minutes, 0)^{ms.power:g} (fitted "
+            "on 2021-22 and 2022-23, who sat known). Minutes when he plays in 2023-24 to "
+            f"2025-26, squared error: no sharing {ms.mse_none:.1f}, shared in proportion to "
+            f"teammates' minutes {ms.mse_proportional:.1f}, this rule {ms.mse_rule:.1f}.",
+            "",
+        ]
     if _has_table(con, "forecast", "margin_range"):
         mr = con.sql("select * from forecast.margin_range order by season").df()
         parts += [

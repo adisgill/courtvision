@@ -103,6 +103,13 @@ def _coaches_line(con, home: int, away: int, season: int, short_team) -> None:
 STATUS_ORDER = {"Out": 0, "Doubtful": 1, "Questionable": 2, "Probable": 3, "Available": 4}
 
 
+def _absorbed(con) -> str:
+    """How much of an absent player's minutes the forecast gives his rotation teammates."""
+    if not _has_table(con, "forecast", "minutes_share"):
+        return "all"
+    return f"{D.q(con, 'select absorb from forecast.minutes_share').absorb.iloc[0]:.0%}"
+
+
 def _availability(con, gid, home, away, season, short_team) -> None:
     """Who the official injury report lists for this game, and what each absence costs."""
     if not _has_table(con, "forecast", "availability"):
@@ -144,14 +151,16 @@ def _availability(con, gid, home, away, season, short_team) -> None:
             if lost:
                 st.caption(f"Ruled out (Out or Doubtful), these players were expected to add "
                            f"{lost:+.1f} points per 100 possessions to the team. The forecast "
-                           "drops them and gives their minutes to teammates.")  # fmt: skip
+                           f"drops them and gives {_absorbed(con)} of their minutes to the "
+                           "teammates expected to play, more to those with room for more, as "
+                           "absences were shared in past seasons.")  # fmt: skip
             q = r[r.status == "Questionable"]
             if "p_play" in r.columns and not q.empty and pd.notna(q.p_play.iloc[0]):
                 st.caption(
                     f"Questionable players count as playing {q.p_play.iloc[0]:.0%} of the "
                     "time: how often Questionable players have played in the games scored so "
-                    "far, pulled toward even while there are few. The minutes they may miss go "
-                    "to teammates; their own stat lines are for if they play."
+                    "far, pulled toward even while there are few. The minutes they may miss are "
+                    "shared out the same way; their own stat lines are for if they play."
                 )
 
 
