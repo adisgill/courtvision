@@ -90,7 +90,7 @@ def test_run_forecasts_and_publishes_first_thing(tmp_path, monkeypatch, caplog):
     daily.run(dry_run=True)
     steps = [r.getMessage() for r in caplog.records if r.getMessage().startswith("$ ")]
     assert steps == ["$ courtvision ingest injuries --fetch", "$ courtvision forecast",
-                     "$ courtvision demo --publish"]  # fmt: skip
+                     "$ courtvision demo --publish", "$ courtvision site --publish"]  # fmt: skip
 
 
 def test_forecast_skips_games_in_progress(con):

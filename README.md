@@ -4,9 +4,11 @@
 walk-forward on 6,146 games, and an interactive app with scouting reports, lineups, play
 types, coaching analytics and a player market.
 
-**[Open the live app →](https://courtvis.streamlit.app/)**
+**[Open the live site →](https://adisgill.github.io/courtvision/)**
 (demo data: full game-level detail for 2025-26 and this season, season ratings back to
-1974-75; if it's been idle, Streamlit takes about a minute to wake it.)
+1974-75, updated every day; it runs in your browser, so the first page takes a few seconds
+to load. The original [Streamlit app](https://courtvis.streamlit.app/) is still up, with
+live mode.)
 
 ![Scouting report: hexagon shot maps of where each team can hurt the other](docs/images/scouting.png)
 
@@ -162,7 +164,7 @@ uv run courtvision daily                          # the whole day unattended (be
 
 `uv run courtvision build` reruns the whole chain from the raw caches.
 
-The [live app](https://courtvis.streamlit.app/) runs the root
+The [Streamlit app](https://courtvis.streamlit.app/) runs the root
 `streamlit_app.py` on Streamlit Community Cloud. With no database of its own, it
 downloads the `courtvision demo` file from the repo's
 [`demo-data` release](https://github.com/adisgill/courtvision/releases/tag/demo-data), and
@@ -174,8 +176,10 @@ design system as the sibling project [pitchvision](https://adisgill.github.io/pi
 is a static site: DuckDB runs in the browser and reads the published Parquet files over HTTP,
 so there's no server. `courtvision site` exports the demo database as content-addressed
 Parquet files and a manifest (with the pipeline's SQL macros) to `app/public/data/`;
-`--publish` builds the app and pushes it to the `gh-pages` branch as one orphan commit, for
-GitHub Pages. Live mode needs the Python pipeline and the NBA's live feed (which browsers
+`--publish` builds the app and pushes it to the `gh-pages` branch as one orphan commit, served
+by GitHub Pages at [adisgill.github.io/courtvision](https://adisgill.github.io/courtvision/)
+(the previous data files are kept beside the new ones, so a page open during a deploy keeps
+working). Live mode needs the Python pipeline and the NBA's live feed (which browsers
 can't call from another site), so it stays in `courtvision app`.
 
 ```bash
@@ -189,10 +193,10 @@ npm --prefix app test                                 # the shot-map binning aga
 forecasts right away (so the Upcoming page shows the day's games from the morning on),
 forecasts again 40 minutes before the day's first tip-off with the latest injury report,
 rebuilds once Kaggle's nightly update lands (then re-forecasts the games still to come),
-and publishes the demo after each forecast, logging to `data/logs/`. A forecast never
-predicts a game that has started. To run it every morning on Windows (the machine's clock
-must be US Eastern, like the schedule; it needs the computer on and signed in, and the
-local app closed while it writes):
+and publishes the demo and the web app after each forecast, logging to `data/logs/`. A
+forecast never predicts a game that has started. To run it every morning on Windows (the
+machine's clock must be US Eastern, like the schedule; it needs the computer on and signed
+in, npm on the path, and the local app closed while it writes):
 
 ```powershell
 $repo = "C:\path\to\courtvision"
