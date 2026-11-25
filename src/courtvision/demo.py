@@ -32,6 +32,7 @@ SKIP = {
     "metrics.box_team_game", "metrics.oncourt_player_game", "metrics.presence_player_game",
     "metrics.pbp_stint_team", "metrics.game_pbp_qa", "coach.possessions", "coach.timeouts",
     "lineups.team_stints", "plays.turnover_events", "forecast.wf_players",
+    "ncaa.player_seasons", "draft.outcomes",
 }  # fmt: skip
 # views the app reads, materialized: recent seasons only, or (small ones) whole
 VIEWS_RECENT = ["stg.shots"]

@@ -46,11 +46,18 @@ live mode.)
   anticipate where the number goes: 1.7% less error on the post-possession win probability.
   A local Live view replays games at 25 frames a second. Plan and results:
   [`docs/tracking_spec.md`](docs/tracking_spec.md).
+- **The draft from college stats.** Every Division I player since 2007-08 linked to the
+  NBA career that followed (or didn't), and a model of what a college season says about a
+  player's first four NBA seasons, tested walk-forward on past drafts. Honest result: teams'
+  actual order matches careers better than the model (rank correlation 0.46 vs 0.31, drafts
+  2016-2022), but the model ranks the whole country and flags the players teams pass on. A
+  big board with comparables, the projected order from 4,000 season simulations and the
+  lottery, and a mock first round matched to each team's needs, re-drawable in the app.
 - **Negative results kept, not hidden:** lineup "chemistry" doesn't repeat (split-half
   r ≈ 0), a lineup's own plus-minus predicts its future worse than assuming league
   average, and coach-vs-coach history and positional matchups add nothing out of sample.
   Each is in [`docs/validation.md`](docs/validation.md).
-- **Reproducible:** `courtvision build` rebuilds everything from the raw caches; 156 Python tests and the web app's own.
+- **Reproducible:** `courtvision build` rebuilds everything from the raw caches; 171 Python tests and the web app's own.
 
 **Stack:** Python 3.12 · DuckDB + Parquet · pandas · uv · pytest · ruff · web app: React + TypeScript, DuckDB-WASM, Observable Plot (Streamlit + Plotly locally)
 
@@ -145,7 +152,9 @@ league that season.
    PDF, kept on your machine): who is out, doubtful, questionable or probable for each
    game. Read with the standard library; no PDF dependency.
 7. **You** — optional `data/salary_overrides.csv` to correct or add any deal
-   (format: [`docs/salary_overrides.example.csv`](docs/salary_overrides.example.csv)).
+   (format: [`docs/salary_overrides.example.csv`](docs/salary_overrides.example.csv)), and
+   `data/draft_pick_trades.csv` for traded draft picks (year, round, original, owner,
+   protected_through, kind `convey` or `swap`, note).
 
 8. **[SportVU tracking logs, 2015-16](https://github.com/linouk23/NBA-Player-Movements)**
    (636 games from the first half of the season, which NBA.com briefly published in 2016;
@@ -155,6 +164,12 @@ league that season.
    quality) are ever published. NBA.com's own 2015-16 tracking stats
    (`courtvision tracking nbacom`, through `nba_api`) are the known answers they're checked
    against.
+
+9. **[Barttorvik](https://barttorvik.com/) (T-Rank)** college player seasons, fetched on
+   request (`courtvision ingest ncaa --fetch`: one file per season since 2007-08, 11 s
+   apart, completed seasons once and the season in progress once a day, kept on your
+   machine): every Division I player's box score, rates, height, class, recruiting score
+   and NBA pick, for the draft only.
 
 The rest of courtvision uses no player-tracking data.
 
@@ -176,6 +191,8 @@ uv run courtvision coaching                       # coaching analytics (~1 min)
 uv run courtvision plays                          # play types, passing, turnovers (~1.5 min)
 uv run courtvision lineups                        # fives, pairs, best fives, closers (~30 s)
 uv run courtvision walkforward                    # test predictions on 5 seasons (~1 min)
+uv run courtvision ingest ncaa --fetch            # college player seasons since 2007-08 (~4 min cold)
+uv run courtvision draft                          # draft model, test, board, order, mock (~30 s)
 uv run courtvision ingest injuries --fetch         # today's official injury report
 uv run courtvision forecast                       # each team's next game (logged to the ledger)
 uv run courtvision scorecard --date 2026-11-12    # how a day's predictions fared

@@ -322,6 +322,55 @@ def ingest_coaches(
     typer.echo(res)
 
 
+def _college_season(today=None) -> int:
+    """Barttorvik's year of the college season in progress (2027 = 2026-27): seasons
+    tip off in November; before that, the last one finished."""
+    from datetime import date
+
+    today = today or date.today()
+    return today.year + 1 if today.month >= 11 else today.year
+
+
+@ingest_app.command("ncaa")
+def ingest_ncaa(
+    fetch: bool = typer.Option(
+        False,
+        "--fetch",
+        help="Download from Barttorvik first: seasons not cached yet (2007-08 on, one request "
+        "each, 11 s apart) and the season in progress once a day. Without it the cache is "
+        "loaded.",
+    ),
+) -> None:
+    """Every Division I player-season (Barttorvik) -> ncaa.player_seasons, for the draft
+    model (`courtvision draft`)."""
+    import logging
+
+    from courtvision.db import connect
+    from courtvision.ingest import barttorvik
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    root = get_paths().data / "raw" / "barttorvik"
+    current = _college_season()
+    if fetch:
+        barttorvik.fetch(root, current)
+    with connect() as con:
+        typer.echo(barttorvik.load(con, root, current))
+
+
+@app.command("draft")
+def draft_cmd() -> None:
+    """The draft from college stats -> draft.*: NBA outcomes of every college player,
+    the walk-forward test on past drafts, this season's big board and comparables, the
+    projected order (season simulations and the lottery; traded picks from
+    data/draft_pick_trades.csv) and a mock first round. Needs `ingest ncaa` and the
+    market model."""
+    from courtvision import draft
+    from courtvision.db import connect
+
+    with connect() as con:
+        typer.echo(draft.run(con, get_paths().data))
+
+
 @ingest_app.command("injuries")
 def ingest_injuries(
     fetch: bool = typer.Option(
@@ -593,7 +642,7 @@ def build(
 ) -> None:
     """Rebuild everything from the raw caches: kaggle-load -> nba-api load -> metrics ->
     salaries -> market -> coaches -> coaching -> plays -> lineups -> walk-forward ->
-    injuries (cached) -> forecast."""
+    college seasons -> draft -> injuries (cached) -> forecast."""
     from courtvision.db import connect
     from courtvision.ingest import nba_api_pull
 
@@ -620,6 +669,14 @@ def build(
     else:
         typer.echo("no coach cache: run `courtvision ingest coaches` for coaching and the "
                    "walk-forward model")  # fmt: skip
+    if (paths.data / "raw" / "barttorvik").exists() and (
+        paths.data / "raw" / "salaries" / "mrbridge"
+    ).exists():
+        ingest_ncaa(fetch=False)
+        draft_cmd()
+    else:
+        typer.echo("no college or salary cache: run `courtvision ingest ncaa --fetch` for the "
+                   "draft")  # fmt: skip
     ingest_injuries(fetch=False)  # the newest cached report, if any; never fetches
     forecast_cmd()
 

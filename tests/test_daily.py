@@ -89,7 +89,8 @@ def test_run_forecasts_and_publishes_first_thing(tmp_path, monkeypatch, caplog):
     caplog.set_level("INFO", logger=daily.__name__)
     daily.run(dry_run=True)
     steps = [r.getMessage() for r in caplog.records if r.getMessage().startswith("$ ")]
-    assert steps == ["$ courtvision ingest injuries --fetch", "$ courtvision forecast",
+    assert steps == ["$ courtvision ingest ncaa --fetch", "$ courtvision draft",
+                     "$ courtvision ingest injuries --fetch", "$ courtvision forecast",
                      "$ courtvision demo --publish", "$ courtvision site --publish"]  # fmt: skip
 
 

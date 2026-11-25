@@ -1308,3 +1308,94 @@ and 4 PM starts as a fallback (one run at a time). The live app checks for a new
 copy every 10 minutes (it was 3 hours), and the Upcoming page drops games from earlier
 days and says when the forecast was made. The extra morning forecast changes nothing that
 is scored: the scorecard grades each game's latest prediction before its tip-off.
+
+## 22. The draft from college stats (2026-11-24)
+
+Requested by the user: a draft and NCAA scouting section with college stats, and who each
+team should take at its pick. `courtvision ingest ncaa --fetch` + `courtvision draft`.
+
+**Source (user-approved 2026-11-24).** Barttorvik (T-Rank) season files: every Division I
+player-season since 2007-08, one CSV per season (`getadvstats.php?year=Y&csv=1`, no
+header; columns named by checking known players, e.g. Fultz 23.2 points and pick 1, Ball
+7.6 assists, their birth dates). Box totals, tempo-free rates, Barttorvik's BPM family,
+height, class, role, recruiting score (0-100, about six players a year at 99+), birth
+date (about 40% of rows carry a placeholder Oct 15 date: flagged, and age then comes from
+it as given) and, for drafted players, the NBA pick. robots.txt allows the endpoint for
+ordinary clients with a 10 s crawl delay (it blocks AI crawlers site-wide; these downloads
+are the user's pipeline, at the user's request). Completed seasons are downloaded once,
+the season in progress once a day (by the daily run), 11 s apart; `build` reads only the
+cache. Tankathon and RealGM were considered for pick ownership: Tankathon's robots.txt
+blocks AI agents including user-initiated ones, and RealGM sits behind a bot challenge, so
+neither is fetched (see *Pick owners*).
+
+**Outcome.** WAR over a player's first four NBA seasons after leaving college (0 for the
+~95% who never play): `(impact + 2.0) x possessions / 200 / 32.3`, the market model's
+replacement level and points per win (section 11), from `metrics.player_impact`. College
+players are linked to NBA careers by draft year and pick when drafted (the last name must
+agree; 866 players) and otherwise by name among players whose first NBA season came within
+two years of leaving college (unique matches only; 513, the undrafted who made it). Tiers:
+NBA player 1+, rotation 4+, starter 10+, star 20+ WAR. 54% of first-round picks from
+college since 2008 reached rotation.
+
+**Inputs** (one row per player-season with at least 10% of team minutes): age at the
+draft and its square, height, recruiting score (with an elite hinge above 95, and
+unrated), high-major conference, schedule strength (adjusted minus raw offensive rating),
+seasons in college, minutes, gain in BPM on last season, BPM/OBPM/DBPM, usage, true
+shooting, assist, turnover, rebound, steal and block rates, free-throw rate, three-point
+rate and volume, rim and dunk shares, FT% and 3P%. Rates are clipped to the season's
+1st-99th percentile (a game or two can produce any rate), blended with the previous season
+at half weight, and shrunk by possessions toward what players of the same recruiting level
+and class (freshman or not) did that season. So early in a season a returning player
+starts from last year and a top recruit from what top recruits usually do (a freshman BPM
+near +6.6 for scores of 99.5+), not from the league average.
+
+**Model.** Penalized logistic regressions (ridge 2 on standardized inputs, damped Newton)
+for P(WAR >= t) at 13 thresholds from 0.5 to 30; probabilities are made non-increasing and
+expected WAR is the area under them. Every player-season is a training row labelled with
+the player's eventual outcome, so a freshman is compared with all freshmen, not only the
+ones who left early. Training uses only seasons whose players have nearly all left college
+(`COHORT`: 4 years older than the outcome cutoff). Without that rule recent seasons kept
+only the early leavers, the best players, and the model learned that youth alone predicts
+stardom.
+
+**Test (walk-forward).** Each draft from 2016 is predicted from classes whose four NBA
+seasons were over before it. On the 2016-2022 drafts (complete careers; 2023-2025 shown
+as partial; 2026 predicted but not scored), among drafted college players: rank
+correlation with the outcome **0.31 for the model, 0.46 for the order teams picked in**,
+0.43 for the average of the two ranks. Rotation players among the top 10: 6.1 per draft
+for the model's top 10, 6.6 for the first 10 picks. Over all players leaving college, the
+model separates future NBA players about as well as being drafted does (AUC 0.956 vs
+0.968). The honest reading: NBA teams draft better than college numbers alone, because
+they see workouts, medicals and film; the model's use is ranking the whole country and
+flagging late picks and undrafted players whose numbers say more than their reputation
+(Jalen Duren, pick 13 in 2022, was the model's #1 among that draft's college players).
+
+**Board.** This season's players (age at most 25.5 at the draft), top 150 by expected WAR,
+with tier chances, each player's four largest pushes on the rotation log-odds, strengths
+on the five team-need dimensions (z-scores among the board: shooting from TS, 3P%, FT% and
+three volume; defense from DBPM, steals and blocks; ball control from assists less
+turnovers; backcourt = guard share x OBPM; frontcourt = big share x rebounding, blocks and
+rim share), and five comparables: the closest final college seasons (16 standardized
+inputs) among players who were drafted or reached the NBA, with their outcomes. College
+players only: international, G League and other prospects aren't covered.
+
+**Projected order.** Team ratings from this season's margins (home court 1.7 points,
+removed), pulled toward 0.6 x last season's rating as if it were 12 games; 4,000
+simulations of the rest of the schedule, each with its own rating error (3.5 points,
+shrinking as the season goes) and 13-point game noise; seeds 1-6 per conference make the
+playoffs, 7-10 play in (7 v 8, 9 v 10, then the loser of the first against the winner of
+the second); the 14 others enter the lottery with the 2019 odds (14, 14, 14, 12.5, ...,
+0.5%), four picks drawn, the rest by record, then the playoff teams by record.
+
+**Pick owners.** `data/draft_pick_trades.csv` (year, round, original, owner,
+protected_through, kind `convey` or `swap`, note) moves traded first-round picks to their
+owners in every simulation, with protections and swaps. It starts empty, so until it is
+filled each pick sits with the team whose record earns it; the app says so.
+
+**Who should draft whom.** A team's need on each dimension is how far its opponent-adjusted
+rating sits below average, in tens, 0-2 (the market model's ratings, section 11). Fit is a
+prospect's strength averaged over the team's needs, weighted by need, -2.5 to 2.5. At each
+pick the team takes the available prospect with the most `ev x (1 + 0.1 x fit)`: fit moves
+value by up to 25%, so the top picks go to the best players and need decides between
+prospects close in value. The app runs the same rule in the browser after a re-drawn
+lottery, applying the recorded trades.

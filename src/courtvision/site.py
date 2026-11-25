@@ -40,6 +40,7 @@ ATTRIBUTION = {
     "nba": "Shot charts, league shot averages and the official injury report: NBA.com "
            "(stats.nba.com via nba_api; the NBA's injury report PDFs).",
     "bbref": "Player contracts and head coaches: Basketball-Reference.com.",
+    "barttorvik": "College player seasons (2007-08 on) for the draft: Barttorvik.com (T-Rank).",
 }  # fmt: skip
 
 

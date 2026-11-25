@@ -1,8 +1,9 @@
 """The daily run (``courtvision daily``), meant to start every morning from a scheduled task:
 
 1. **Score** every logged day of the past week that isn't fully scored (yesterday, after a
-   normal night), then **forecast** right away and **publish** the demo and the web app, so
-   the live apps show last night's results and today's games from the morning on.
+   normal night), refresh the college season and the **draft** board, then **forecast**
+   right away and **publish** the demo and the web app, so the live apps show last night's
+   results and today's games from the morning on.
 2. **Forecast** again ``LEAD`` before the day's first tip-off, with the latest injury
    report, and publish. A forecast never predicts a game that has started (those teams
    get their next game), so every logged prediction for a game was made before it, and
@@ -161,6 +162,11 @@ def run(dry_run: bool = False) -> dict:
 
     def games_left() -> bool:
         return any(t - timedelta(minutes=5) > datetime.now() for t in day_tips)
+
+    # the draft board moves with last night's college games and the NBA standings: once a
+    # day, before the first publish
+    if step("ingest", "ncaa", "--fetch"):
+        step("draft")
 
     # first thing: today's games (and last night's scores) on the live app, from the data so
     # far; the forecast that counts runs LEAD before the first tip-off (started after that,
