@@ -6,7 +6,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Row, useQuery } from "../db";
 import { css, fmt } from "../lib/format";
-import { DIMS, applyTrades, bestFill, drawLottery, height, pct1, posGroup, runMock } from "../lib/draft";
+import { DIMS, bestFill, groupDraws, height, ownerText, pct1, posGroup, possessive, runMock } from "../lib/draft";
 import { useTeamNames } from "../lib/nba";
 import { Figure } from "../ui/Figure";
 import { HeatGrid } from "../ui/grids";
@@ -36,7 +36,7 @@ export default function Draft() {
 
 function Headline({ info }: { info: Row }) {
   const top = useQuery(`select player, team, ev from draft.prospects order by rank limit 1`).rows[0];
-  const worst = useQuery(`select o.team_id, o.p_1, o.exp_wins from draft.order o order by seed limit 1`).rows[0];
+  const worst = useQuery(`select o.team_id, o.owner_id, o.p_1, o.exp_wins from draft.order o order by seed limit 1`).rows[0];
   const names = useTeamNames(Number(info.nba_season));
   return (
     <div className="tiles">
@@ -44,7 +44,8 @@ function Headline({ info }: { info: Row }) {
       <Tile label="Ranking past drafts" value={`${fmt.n(info.spearman_model, 2)} vs ${fmt.n(info.spearman_pick, 2)}`}
         delta={`rank correlation with careers, model vs the teams' order (${info.test_drafts})`} />
       <Tile label="Best odds at #1" value={worst ? names.get(Number(worst.team_id))?.team ?? "–" : "–"}
-        delta={worst ? `${fmt.pct(worst.p_1, 0)} · projected ${fmt.n(worst.exp_wins, 0)} wins` : undefined} />
+        delta={worst ? `${fmt.pct(worst.p_1, 0)} · projected ${fmt.n(worst.exp_wins, 0)} wins${Number(worst.owner_id) !== Number(worst.team_id)
+          ? ` · pick projected to go to ${names.get(Number(worst.owner_id))?.team ?? "another team"}` : ""}` : undefined} />
       <Tile label="Players linked to NBA careers" value={fmt.n(Number(info.linked_pick) + Number(info.linked_name))}
         delta={`${fmt.n(info.linked_pick)} by draft pick, ${fmt.n(info.linked_name)} by name`} />
     </div>
@@ -110,32 +111,41 @@ function Mock({ info }: { info: Row }) {
   const board = useQuery(`select * from draft.prospects order by rank limit 80`);
   const fitQ = useQuery(`select team_id, pid, fit from draft.fit`);
   const teams = useQuery(`select * from market.teams`);
-  const odds = useQuery(`select per_1000 from draft.lottery order by seed`);
+  const drawQ = useQuery(`select draw, slot, team_id, owner_id from draft.draws`);
   const names = useTeamNames(Number(info.nba_season));
-  const [draw, setDraw] = useState<number[] | null>(null);
+  const [draw, setDraw] = useState<number | null>(null);
   const [mode, setMode] = useParam("order", "Projected");
   const fit = useMemo(() => new Map(fitQ.rows.map((r) => [`${r.team_id}:${r.pid}`, Number(r.fit)])), [fitQ.rows]);
   const teamRow = useMemo(() => new Map(teams.rows.map((r) => [Number(r.team_id), r])), [teams.rows]);
+  const draws = useMemo(() => groupDraws(drawQ.rows), [drawQ.rows]);
   const seeded = order.rows.map((r) => Number(r.team_id));
-  const slots = mode === "Lottery draw" && draw ? draw : seeded;
-  const owners = applyTrades(slots, order.rows);
+  const drawn = mode === "Lottery draw" && draw != null ? draws[draw] : null;
+  const slots = drawn ? drawn[0] : seeded;
+  const owners = drawn ? drawn[1] : order.rows.map((r) => Number(r.owner_id));
   const picks = useMemo(() => board.rows.length && fit.size ? runMock(owners, slots, board.rows, fit, Number(info.fit_weight)) : [],
     [board.rows, fit, owners.join(","), slots.join(","), info.fit_weight]);
-  const redraw = () => { setDraw(drawLottery(seeded, odds.rows.map((r) => Number(r.per_1000)))); setMode("Lottery draw"); };
+  const redraw = () => {
+    if (draws.length < 2) return;
+    let d = 1 + Math.floor(Math.random() * (draws.length - 1));
+    if (d === draw && draws.length > 2) d = 1 + (d % (draws.length - 1));
+    setDraw(d); setMode("Lottery draw");
+  };
   const nm = (t: number) => names.get(t)?.team ?? String(t);
+  const moving = Number(info.picks_moving ?? 0);
   return (
     <>
       <div className="filters">
-        <Seg label="Order" options={[["Projected", "Projected order"], ["Lottery draw", "Lottery draw"]]} value={mode} onChange={(v) => { if (v === "Lottery draw" && !draw) redraw(); else setMode(v); }} />
-        <button className="btn" onClick={redraw}>Draw the lottery{draw ? " again" : ""}</button>
+        <Seg label="Order" options={[["Projected", "Projected order"], ["Lottery draw", "Lottery draw"]]} value={mode} onChange={(v) => { if (v === "Lottery draw" && draw == null) redraw(); else setMode(v); }} />
+        <button className="btn" onClick={redraw} disabled={draws.length < 2}>Draw the lottery{draw != null ? " again" : ""}</button>
         <span className="xs muted" style={{ maxWidth: 520 }}>Projected: the lottery goes to form (worst record picks first). A draw uses the NBA's odds (14% each for the three worst, down to 0.5%).
-          {Number(info.trades) === 0 ? " No traded picks recorded yet: each pick sits with the team whose record earns it." : ` ${info.trades} traded picks applied.`}</span>
+          {moving === 0 ? " No traded picks recorded yet: each pick sits with the team whose record earns it."
+            : ` Traded picks follow their protections and swaps in every draw (${moving} picks can change hands; see the draft order).`}</span>
       </div>
       <Loading state={board} />
       <div className="mockgrid">
         {picks.map((m) => {
           const fills = bestFill(teamRow.get(m.team), m.p);
-          const moved = draw && mode === "Lottery draw" ? seeded.indexOf(m.original) + 1 : null;
+          const moved = drawn ? seeded.indexOf(m.original) + 1 : null;
           return (
             <div key={m.pick} className="mockpick">
               <div className="num pickno">{m.pick}</div>
@@ -166,28 +176,70 @@ function Mock({ info }: { info: Row }) {
 function Order({ info }: { info: Row }) {
   const order = useQuery(`select * from draft.order order by seed`);
   const probs = useQuery(`select * from draft.order_probs`);
+  const ownQ = useQuery(`select * from draft.pick_owners`);
   const names = useTeamNames(Number(info.nba_season));
   const P = new Map(probs.rows.map((r) => [`${r.team_id}:${r.slot}`, Number(r.prob)]));
   const slots = Array.from({ length: 14 }, (_, i) => i + 1);
+  const ab = useMemo(() => new Map(order.rows.map((r) => [Number(r.team_id), String(r.abbrev)])), [order.rows]);
+  const abbrev = (t: number) => ab.get(t) ?? String(t);
+  const ownersOf = useMemo(() => {
+    const m = new Map<number, Row[]>();
+    for (const r of ownQ.rows) m.set(Number(r.team_id), [...(m.get(Number(r.team_id)) ?? []), r]);
+    for (const v of m.values()) v.sort((a, b) => b.prob - a.prob);
+    return m;
+  }, [ownQ.rows]);
+  const traded = order.rows.filter((r) => r.p_kept < 0.995);
+  const team = (t: number) => names.get(t)?.team ?? abbrev(t);
   return (
     <>
       <Loading state={order} />
       <Card title="Where each team is likely to pick" sub={`${fmt.n(info.sims)} simulations of the rest of the season (team ratings from this season's margins, pulled toward last season's, with their uncertainty), the play-in, then the lottery.`}>
         <HeatGrid rowHead="Team" rowWidth={170} compact
           cols={[{ key: "w", label: "Wins now" }, { key: "ew", label: "Proj. wins" }, { key: "po", label: "Playoffs" }, { key: "ep", label: "Exp. pick" },
+            { key: "to", label: "Pick goes to", title: "Who ends up with this team's first-round pick, across the simulations" },
             ...slots.map((s) => ({ key: String(s), label: `#${s}` }))]}
-          rows={order.rows.map((r) => ({
-            key: String(r.team_id), label: names.get(Number(r.team_id))?.team ?? r.abbrev, to: `/team/${r.team_id}`,
-            cells: {
-              w: { text: fmt.n(r.wins_now) }, ew: { text: fmt.n(r.exp_wins, 0) }, po: { text: fmt.pct(r.p_playoffs) }, ep: { text: fmt.n(r.exp_pick, 1) },
-              ...Object.fromEntries(slots.map((s) => {
-                const p = P.get(`${r.team_id}:${s}`) ?? 0;
-                return [String(s), { text: p >= 0.005 ? fmt.pct(p) : "", z: p > 0 ? Math.min(1, p / 0.35) : null, tip: <><b>{names.get(Number(r.team_id))?.team}</b><div>{fmt.pct(p, 1)} to pick #{s}</div></> }];
-              })),
-            },
-          }))} />
-        <p className="xs muted">Picks 15-30 follow the record of the playoff teams. Traded picks: {Number(info.trades) === 0 ? "none recorded yet, so every pick shows under the team whose record earns it" : `${info.trades} recorded`}.</p>
+          rows={order.rows.map((r) => {
+            const own = ownersOf.get(Number(r.team_id)) ?? [];
+            const top = own[0];
+            return {
+              key: String(r.team_id), label: team(Number(r.team_id)), to: `/team/${r.team_id}`,
+              cells: {
+                w: { text: fmt.n(r.wins_now) }, ew: { text: fmt.n(r.exp_wins, 0) }, po: { text: fmt.pct(r.p_playoffs) }, ep: { text: fmt.n(r.exp_pick, 1) },
+                to: r.p_kept >= 0.995 || !top ? { text: "own", muted: true }
+                  : { text: `${abbrev(Number(top.owner_id))}${top.prob < 0.995 ? ` ${Math.round(100 * top.prob)}%` : ""}`,
+                      tip: <><b>{possessive(team(Number(r.team_id)))} pick</b><div>{ownerText(own, abbrev)}</div>{r.pick_note && <div className="xs" style={{ maxWidth: 280 }}>{r.pick_note}</div>}</> },
+                ...Object.fromEntries(slots.map((s) => {
+                  const p = P.get(`${r.team_id}:${s}`) ?? 0;
+                  return [String(s), { text: p >= 0.005 ? fmt.pct(p) : "", z: p > 0 ? Math.min(1, p / 0.35) : null, tip: <><b>{team(Number(r.team_id))}</b><div>{fmt.pct(p, 1)} to pick #{s}</div></> }];
+                })),
+              },
+            };
+          })} />
+        <p className="xs muted">Picks 15-30 follow the record of the playoff teams. {traded.length === 0 ? "No traded picks recorded yet, so every pick shows under the team whose record earns it."
+          : `"Pick goes to": the likeliest owner once protections and swaps play out in each simulation.`}</p>
       </Card>
+      {traded.length > 0 && (
+        <Card title="Who gets the traded picks" sub={`${traded.length} first-round picks can change hands. Each bar splits the ${fmt.n(info.sims)} simulations by who ends up with the pick; protections, swaps and "most favorable of" deals are resolved draw by draw.`}>
+          <div className="tradelist">
+            {traded.map((r) => {
+              const own = (ownersOf.get(Number(r.team_id)) ?? []).filter((o) => o.prob >= 0.005);
+              return (
+                <div key={r.team_id} className="traderow">
+                  <div className="small"><Link to={`/team/${r.team_id}`}><b>{team(Number(r.team_id))}</b></Link>
+                    <span className="muted"> · projected #{r.seed}, expected {fmt.n(r.exp_pick, 1)}</span></div>
+                  <div className="splitbar" role="img" aria-label={ownerText(own, abbrev)}>
+                    {own.map((o, i) => <span key={o.owner_id} title={`${team(Number(o.owner_id))}: ${fmt.pct(o.prob, 1)}`}
+                      style={{ flexGrow: o.prob, background: i === 0 ? "var(--accent)" : i === 1 ? "color-mix(in srgb, var(--accent) 40%, var(--surface-3))" : "var(--axis)" }} />)}
+                  </div>
+                  <div className="small">{ownerText(own, abbrev)}</div>
+                  {r.pick_note && <div className="xs muted note">{r.pick_note}</div>}
+                </div>
+              );
+            })}
+          </div>
+          <p className="xs muted">Pick terms from <span className="mono">data/draft_pick_trades.csv</span>{info.trades_source ? <>: {info.trades_source}</> : "."}</p>
+        </Card>
+      )}
     </>
   );
 }

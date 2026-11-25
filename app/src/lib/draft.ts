@@ -1,5 +1,5 @@
-// The draft: labels, formatting, and the mock draft and lottery (the same rules as
-// courtvision/draft.py, so a re-drawn lottery gets the same kind of picks).
+// The draft: labels, formatting, and the mock draft (the same rule as courtvision/draft.py;
+// lottery draws and traded-pick owners come resolved from the build).
 import type { Row } from "../db";
 
 export const DIMS: [string, string][] = [["shooting", "Shooting"], ["defense", "Defense"], ["ball_control", "Ball control"],
@@ -64,34 +64,25 @@ export function runMock(owners: number[], originals: number[], board: Row[], fit
   });
 }
 
-/** One lottery: four picks drawn among the 14 worst projected teams by the odds, the
- * rest of them in seed order, then everyone else by record. ``seeded``: teams worst first. */
-export function drawLottery(seeded: number[], odds: number[], rand = Math.random): number[] {
-  const lott = seeded.slice(0, 14);
-  const left = lott.map((_, i) => i);
-  const won: number[] = [];
-  for (let k = 0; k < 4; k++) {
-    const total = left.reduce((a, i) => a + odds[i], 0);
-    let r = rand() * total, j = 0;
-    while (j < left.length - 1 && r >= odds[left[j]]) { r -= odds[left[j]]; j++; }
-    won.push(left.splice(j, 1)[0]);
+/** Lottery draws (draft.draws: draw, slot, team_id, owner_id) as [teams by slot, owners by
+ * slot] per draw. Draw 0 is the projected order; the rest use the NBA's lottery odds, with
+ * traded picks already resolved by courtvision/draft.py. */
+export function groupDraws(rows: Row[]): [number[], number[]][] {
+  const out: [number[], number[]][] = [];
+  for (const r of rows) {
+    const d = Number(r.draw);
+    (out[d] ??= [[], []]);
+    out[d][0][Number(r.slot) - 1] = Number(r.team_id);
+    out[d][1][Number(r.slot) - 1] = Number(r.owner_id);
   }
-  return [...won, ...left].map((i) => lott[i]).concat(seeded.slice(14));
+  return out;
 }
 
-/** Who picks at each slot after recorded trades (``order`` rows carry trade_owner_id,
- * kind and protected_through for a traded pick). */
-export function applyTrades(slots: number[], order: Row[]): number[] {
-  const owner = new Map(slots.map((t) => [t, t]));
-  const slotOf = new Map(slots.map((t, i) => [t, i + 1]));
-  for (const r of order) {
-    const t = Number(r.team_id), to = r.trade_owner_id == null ? null : Number(r.trade_owner_id);
-    if (to == null || Number.isNaN(to)) continue;
-    if (r.kind === "swap") {
-      if ((slotOf.get(t) ?? 99) < (slotOf.get(to) ?? 99)) { owner.set(t, to); owner.set(to, t); }
-    } else if (r.protected_through == null || Number.isNaN(r.protected_through) || (slotOf.get(t) ?? 0) > r.protected_through) {
-      owner.set(t, to);
-    }
-  }
-  return slots.map((t) => owner.get(t) ?? t);
+/** "Utah Jazz's", "Milwaukee Bucks'". */
+export const possessive = (name: string) => (name.endsWith("s") ? `${name}'` : `${name}'s`);
+
+/** "NOP 65% · ATL 35%": who ends up with a pick (draft.pick_owners rows of one team). */
+export function ownerText(rows: Row[], abbrev: (t: number) => string, min = 0.005): string {
+  return [...rows].filter((r) => r.prob >= min).sort((a, b) => b.prob - a.prob)
+    .map((r) => `${abbrev(Number(r.owner_id))} ${Math.round(100 * r.prob)}%`).join(" · ");
 }

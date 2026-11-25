@@ -1,30 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { applyTrades, drawLottery, needWeights, runMock } from "./draft";
+import { groupDraws, needWeights, ownerText, runMock } from "./draft";
 
-const ODDS = [140, 140, 140, 125, 105, 90, 75, 60, 45, 30, 20, 15, 10, 5];
-
-describe("draft lottery and mock", () => {
-  it("draws four lottery winners by the odds and keeps everyone else in order", () => {
-    const seeded = Array.from({ length: 30 }, (_, i) => i + 1);
-    let seed = 1;
-    const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-    let firstWorst = 0;
-    for (let k = 0; k < 20000; k++) if (drawLottery(seeded, ODDS, rand)[0] === 1) firstWorst++;
-    expect(Math.abs(firstWorst / 20000 - 0.14)).toBeLessThan(0.01);
-    const one = drawLottery(seeded, ODDS, rand);
-    expect([...one].sort((a, b) => a - b)).toEqual(seeded);
-    expect(one.slice(14)).toEqual(seeded.slice(14));
-    const rest = one.slice(4, 14);
-    expect(rest).toEqual([...rest].sort((a, b) => a - b));
+describe("draft draws and mock", () => {
+  it("groups draws into teams and owners by slot", () => {
+    const rows = [
+      { draw: 1, slot: 2, team_id: 5, owner_id: 9 }, { draw: 0, slot: 1, team_id: 4, owner_id: 4 },
+      { draw: 1, slot: 1, team_id: 4, owner_id: 4 }, { draw: 0, slot: 2, team_id: 5, owner_id: 9 },
+    ];
+    expect(groupDraws(rows)).toEqual([[[4, 5], [4, 9]], [[4, 5], [4, 9]]]);
   });
 
-  it("applies protections and swaps", () => {
-    const order = [
-      { team_id: 1, trade_owner_id: 9, kind: "convey", protected_through: 1 },
-      { team_id: 2, trade_owner_id: 3, kind: "swap", protected_through: null },
-    ];
-    expect(applyTrades([1, 2, 3], order)).toEqual([1, 3, 2]); // 1 keeps #1; 3 swaps into #2
-    expect(applyTrades([3, 1, 2], order)).toEqual([3, 9, 2]); // 1's #2 conveys; 2's #3 is worse
+  it("writes who ends up with a pick, likeliest first", () => {
+    const ab = (t: number) => ({ 1: "NOP", 2: "ATL", 3: "MIL" }[t] ?? "?");
+    const rows = [{ owner_id: 2, prob: 0.35 }, { owner_id: 1, prob: 0.649 }, { owner_id: 3, prob: 0.001 }];
+    expect(ownerText(rows, ab)).toBe("NOP 65% · ATL 35%");
   });
 
   it("takes value, with fit deciding close calls", () => {

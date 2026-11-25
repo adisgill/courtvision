@@ -1324,9 +1324,9 @@ it as given) and, for drafted players, the NBA pick. robots.txt allows the endpo
 ordinary clients with a 10 s crawl delay (it blocks AI crawlers site-wide; these downloads
 are the user's pipeline, at the user's request). Completed seasons are downloaded once,
 the season in progress once a day (by the daily run), 11 s apart; `build` reads only the
-cache. Tankathon and RealGM were considered for pick ownership: Tankathon's robots.txt
-blocks AI agents including user-initiated ones, and RealGM sits behind a bot challenge, so
-neither is fetched (see *Pick owners*).
+cache. Tankathon, RealGM and Spotrac were considered for pick ownership: Tankathon's and
+Spotrac's robots.txt block AI agents from their data pages, including user-initiated ones,
+and RealGM sits behind a bot challenge, so none is fetched (see *Pick owners*).
 
 **Outcome.** WAR over a player's first four NBA seasons after leaving college (0 for the
 ~95% who never play): `(impact + 2.0) x possessions / 200 / 32.3`, the market model's
@@ -1388,14 +1388,30 @@ the second); the 14 others enter the lottery with the 2019 odds (14, 14, 14, 12.
 0.5%), four picks drawn, the rest by record, then the playoff teams by record.
 
 **Pick owners.** `data/draft_pick_trades.csv` (year, round, original, owner,
-protected_through, kind `convey` or `swap`, note) moves traded first-round picks to their
-owners in every simulation, with protections and swaps. It starts empty, so until it is
-filled each pick sits with the team whose record earns it; the app says so.
+protected_through, kind, note) moves traded first-round picks to their owners in every
+simulation. Rules apply in file order: `convey` (with a protection, after which the pick
+stays where it was, so a second row can send a protected pick elsewhere), `swap`, and
+`pool` for "most favorable of" deals: listed picks go to listed teams by favorability, a
+protected pick (`UTA:5`) leaves the pool with one receiver, and `$names` carry a pick from
+one rule to the next (two-stage deals such as the Thunder-Clippers-Raptors chain). Without
+the file each pick sits with the team whose record earns it, and the app says so.
+Published per pick: the chance each team ends up with it, the owner in the projected
+order, and 500 lottery draws from the projected order with owners resolved (the app's
+"draw the lottery"; the browser no longer repeats the trade rules).
+
+*Update (2026-11-25).* The 2027 file (`docs/draft_pick_trades.example.csv`, 15 rules, 18
+picks that can change hands) was entered by hand from Hoops Rumors' list of traded 2027
+first-round picks (it credits RealGM; its robots.txt allows agents), read Nov 25, 2026.
+Wikipedia's 2026-27 transactions list shows no 2027 first traded after the Sept. 14
+Clippers-Raptors deal; Wikipedia has no 2027 draft article (a June stub became a
+redirect). One reading is ours: when Utah's pick lands 1-5 and Utah keeps it, Memphis and
+Phoenix split Cleveland's and Minnesota's by favorability (each of the three teams still
+ends with one pick, and the list names no other fallback).
 
 **Who should draft whom.** A team's need on each dimension is how far its opponent-adjusted
 rating sits below average, in tens, 0-2 (the market model's ratings, section 11). Fit is a
 prospect's strength averaged over the team's needs, weighted by need, -2.5 to 2.5. At each
 pick the team takes the available prospect with the most `ev x (1 + 0.1 x fit)`: fit moves
 value by up to 25%, so the top picks go to the best players and need decides between
-prospects close in value. The app runs the same rule in the browser after a re-drawn
-lottery, applying the recorded trades.
+prospects close in value. The app runs the same rule in the browser on any of the
+published lottery draws.

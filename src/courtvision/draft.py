@@ -71,6 +71,7 @@ EAST = {1610612737, 1610612738, 1610612739, 1610612741, 1610612748, 1610612749, 
         1610612752, 1610612753, 1610612754, 1610612755, 1610612761, 1610612764, 1610612765,
         1610612766}  # fmt: skip
 SIMS = 4000
+DRAWS = 500  # lottery draws from the projected order shipped to the app, owners resolved
 GAME_SD = 13.0  # margin of a single game around the rating difference
 FIT_WEIGHT = 0.1  # a prospect's value moves this share per unit of fit (fit runs -2.5..2.5)
 TRADES_FILE = "draft_pick_trades.csv"
@@ -521,53 +522,154 @@ def _norm_cdf(x) -> np.ndarray:
 
 
 def read_trades(path: Path, year: int) -> pd.DataFrame:
-    """``data/draft_pick_trades.csv``: who owns first-round picks other than their own.
-    Columns: year, round, original (team abbreviation), owner, protected_through (the
-    original team keeps the pick when it lands at or above this slot; blank = none),
-    kind (``convey`` or ``swap``: the owner takes the better of its own pick and the
-    original's), note."""
+    """``data/draft_pick_trades.csv``: who owns first-round picks other than their own, as
+    rules applied in file order (format: ``docs/draft_pick_trades.example.csv``).
+
+    Columns: year, round, original, owner, protected_through, kind, note. Kinds:
+
+    - ``convey``: the ``original`` team's pick goes to ``owner`` unless it lands at or
+      above ``protected_through`` (blank = unprotected); a protected pick stays where it
+      was, so a second row can send it elsewhere ("1-16 to SAC, 17-30 to OKC" is a row
+      to SAC, then a row to OKC protected through 16).
+    - ``swap``: ``owner`` may exchange its own pick for the original's; the two picks
+      trade places when the original's is the better one.
+    - ``pool``: ``original`` lists picks and ``owner`` lists who receives them, most
+      favorable first ("MEM UTA PHX" for CLE MIN UTA: the best of the three to Memphis).
+      ``UTA:5`` marks a pick protected through 5: it leaves the pool and stays put, and
+      one receiver leaves with it, its own team by default or the one after ``>``
+      (``DEN:5>OKC``).
+
+    A name starting with ``$`` holds a pick between rules: a pool can hand ``$c`` the
+    least favorable pick, and a later row can use ``$c`` as the pick to convey or pool.
+    Lines starting with ``#`` are comments."""
     cols = ["year", "round", "original", "owner", "protected_through", "kind", "note"]
     if not path.exists():
         return pd.DataFrame(columns=cols)
     with open(path, newline="", encoding="utf-8") as f:
-        rows = [r for r in csv.DictReader(f) if (r.get("year") or "").strip()]
+        lines = [x for x in f if x.strip() and not x.lstrip().startswith("#")]
+    rows = [r for r in csv.DictReader(lines) if (r.get("year") or "").strip()]
     t = pd.DataFrame(rows, columns=cols)
     t = t[(t.year.astype(int) == year) & (t["round"].astype(int) == 1)]
     t["protected_through"] = pd.to_numeric(t.protected_through, errors="coerce")
-    t["kind"] = t.kind.fillna("convey").replace("", "convey")
-    return t
+    t["kind"] = t.kind.fillna("convey").replace("", "convey").str.strip().str.lower()
+    t["note"] = t.note.fillna("")
+    return t.reset_index(drop=True)
+
+
+def trades_source(path: Path) -> str:
+    """The ``# source:`` comment of the trades file (where its pick terms come from)."""
+    if not path.exists():
+        return ""
+    with open(path, encoding="utf-8") as f:
+        found = [
+            x.split(":", 1)[1].strip()
+            for x in f
+            if x.lstrip("# ").lower().startswith("source:") and x.lstrip().startswith("#")
+        ]
+    return " ".join(found)
+
+
+def _pool_pick(token: str) -> tuple[str, int | None, str | None]:
+    """``DEN:5>OKC`` -> ("DEN", 5, "OKC")."""
+    ref, _, rest = token.partition(":")
+    if not rest:
+        return ref, None, None
+    prot, _, drop = rest.partition(">")
+    return ref, int(prot), drop or None
+
+
+def parse_rules(trades: pd.DataFrame, known: set[str]) -> list[dict]:
+    """The trade rows as rules for ``resolve``; rows naming an unknown team are dropped."""
+    rules = []
+    for tr in trades.itertuples():
+        kind = tr.kind
+        if kind == "pool":
+            picks = [_pool_pick(x) for x in str(tr.original).split()]
+            to = str(tr.owner).split()
+            refs = [p[0] for p in picks] + [p[2] for p in picks if p[2]] + to
+            rule = {"kind": kind, "picks": picks, "to": to}
+            if len(picks) != len(to):
+                log.warning("pick pool needs as many receivers as picks: %s", tr.original)
+                continue
+        elif kind in ("convey", "swap"):
+            pt = tr.protected_through
+            rule = {"kind": kind, "pick": str(tr.original).strip(), "to": str(tr.owner).strip(),
+                    "prot": int(pt) if pd.notna(pt) else None}  # fmt: skip
+            refs = [rule["pick"], rule["to"]]
+        else:
+            log.warning("unknown pick trade kind %r", kind)
+            continue
+        bad = [r for r in refs if not r.startswith("$") and r not in known]
+        if bad:
+            log.warning("pick trade with unknown team %s: %s -> %s", bad, tr.original, tr.owner)
+            continue
+        moved = ([p[0] for p in rule["picks"]] if kind == "pool" else
+                 [rule["pick"], rule["to"]] if kind == "swap" else [rule["pick"]])  # fmt: skip
+        rule["note"] = tr.note
+        rule["picks_moved"] = [m for m in moved if not m.startswith("$")]
+        rules.append(rule)
+    return rules
+
+
+def resolve(slot: dict[str, int], rules: list[dict]) -> dict[str, str]:
+    """Who ends up with each pick (keyed by the team whose record sets it) for one draft
+    order, ``slot``: team -> slot (1 = first). Rules apply in order (``read_trades``)."""
+    holder = {p: p for p in slot}
+
+    def pick_of(ref: str) -> str | None:
+        if not ref.startswith("$"):
+            return ref if ref in holder else None
+        return next((p for p, h in holder.items() if h == ref), None)
+
+    for r in rules:
+        if r["kind"] == "convey":
+            p = pick_of(r["pick"])
+            if p is not None and (r["prot"] is None or slot[p] > r["prot"]):
+                holder[p] = r["to"]
+        elif r["kind"] == "swap":
+            a, b = pick_of(r["pick"]), pick_of(r["to"])
+            if a is not None and b is not None and slot[a] < slot[b]:
+                holder[a], holder[b] = holder[b], holder[a]
+        else:
+            to, live = list(r["to"]), []
+            for ref, prot, drop in r["picks"]:
+                p = pick_of(ref)
+                if p is None:
+                    continue
+                if prot is not None and slot[p] <= prot:
+                    gone = drop or (p if p in to else to[-1])
+                    if gone in to:
+                        to.remove(gone)
+                    continue
+                live.append(p)
+            for p, t in zip(sorted(live, key=slot.__getitem__), to, strict=False):
+                holder[p] = t
+    # a pick still held by a placeholder name goes back to its own team
+    return {p: (p if h.startswith("$") else h) for p, h in holder.items()}
 
 
 def owners(slots: np.ndarray, teams: list[int], abbrev: dict[int, str],
-           trades: pd.DataFrame) -> tuple[np.ndarray, pd.DataFrame]:  # fmt: skip
-    """Owner of each team's pick in every simulation (sims x teams of team ids), and per
-    original team the chance its pick conveys."""
+           trades: pd.DataFrame) -> tuple[np.ndarray, pd.DataFrame, dict[int, str]]:  # fmt: skip
+    """Owner of each team's pick in every simulated order (``slots``: sims x teams), the
+    chance each team ends up with each pick (team_id = whose record sets it, owner_id,
+    prob), and per team the notes of the rules that touch its pick."""
     by_abbr = {v: k for k, v in abbrev.items()}
-    ix = {t: i for i, t in enumerate(teams)}
+    names = [abbrev.get(t, str(t)) for t in teams]
+    rules = parse_rules(trades, set(by_abbr))
     own = np.tile(np.array(teams), (slots.shape[0], 1))
-    conv = []
-    for tr in trades.itertuples():
-        o, w = by_abbr.get(tr.original.strip()), by_abbr.get(tr.owner.strip())
-        if o is None or w is None:
-            log.warning("pick trade with unknown team: %s -> %s", tr.original, tr.owner)
-            continue
-        i = ix[o]
-        if tr.kind == "swap":
-            j = ix[w]
-            better = slots[:, i] < slots[:, j]  # the original's pick is the better one
-            own[better, i], own[better, j] = w, o
-            conv.append({"team_id": o, "owner_id": w, "kind": "swap",
-                         "protected_through": None, "p_conveys": float(better.mean()),
-                         "note": tr.note})  # fmt: skip
-        else:
-            keep = slots[:, i] <= tr.protected_through if pd.notna(tr.protected_through) else (
-                np.zeros(len(slots), bool))  # fmt: skip
-            own[~keep, i] = w
-            conv.append({"team_id": o, "owner_id": w, "kind": "convey",
-                         "protected_through": tr.protected_through,
-                         "p_conveys": float((~keep).mean()), "note": tr.note})  # fmt: skip
-    cols = ["team_id", "owner_id", "kind", "protected_through", "p_conveys", "note"]
-    return own, pd.DataFrame(conv, columns=cols)
+    if rules:
+        for s in range(slots.shape[0]):
+            got = resolve(dict(zip(names, slots[s].tolist(), strict=True)), rules)
+            own[s] = [by_abbr[got[n]] for n in names]
+    dist = pd.DataFrame({"team_id": np.tile(teams, len(own)), "owner_id": own.ravel()})
+    dist = dist.value_counts().rename("n").reset_index()
+    dist["prob"] = dist.n / len(own)
+    notes: dict[int, list[str]] = {}
+    for r in rules:
+        for a in r["picks_moved"]:
+            if r["note"] and r["note"] not in notes.setdefault(by_abbr[a], []):
+                notes[by_abbr[a]].append(r["note"])
+    return own, dist[["team_id", "owner_id", "prob"]], {t: " ".join(v) for t, v in notes.items()}
 
 
 def need_weights(team_dims: pd.DataFrame) -> pd.DataFrame:
@@ -704,7 +806,7 @@ def run(con: duckdb.DuckDBPyConnection, data_dir: Path) -> dict:
     sim = simulate(teams, ratings, wins.to_dict(), sched, hca, rating_sd)
     abbrev = _abbrevs(con, nba_now)
     trades = read_trades(data_dir / TRADES_FILE, draft_year)
-    own, conveys = owners(sim["slots"], teams, abbrev, trades)
+    _, pick_owners, notes = owners(sim["slots"], teams, abbrev, trades)
     exp_pick = sim["probs"] @ np.arange(1, len(teams) + 1)
     order = pd.DataFrame({
         "team_id": teams, "rating": [ratings[t] for t in teams],
@@ -716,15 +818,26 @@ def run(con: duckdb.DuckDBPyConnection, data_dir: Path) -> dict:
     order["seed"] = order.exp_wins.rank(method="first").astype(int)  # projected, worst = 1
     # owner of each slot in the projected order (the lottery going to form)
     proj = order.sort_values("seed").team_id.tolist()
-    proj_slots = np.zeros((1, len(teams)), int)
-    for k, t in enumerate(proj, 1):
-        proj_slots[0, teams.index(t)] = k
-    own_proj, _ = owners(proj_slots, teams, abbrev, trades)
-    owner_of = dict(zip(teams, own_proj[0].tolist(), strict=True))
+    # lottery draws from the projected order, owners resolved, for the app's "draw the
+    # lottery" (the first row is the projected order itself: the lottery going to form)
+    rng = np.random.default_rng(11)
+    seeds = np.array(proj)
+    pos = {t: i for i, t in enumerate(teams)}
+    draw_slots = np.zeros((DRAWS + 1, len(teams)), int)
+    for d in range(DRAWS + 1):
+        o = seeds if d == 0 else np.concatenate([lottery_draw(seeds[:14], rng), seeds[14:]])
+        draw_slots[d, [pos[t] for t in o]] = np.arange(1, len(teams) + 1)
+    draw_own, _, _ = owners(draw_slots, teams, abbrev, trades)
+    owner_of = dict(zip(teams, draw_own[0].tolist(), strict=True))
     order["owner_id"] = order.team_id.map(owner_of)
-    order = order.merge(conveys.rename(columns={"owner_id": "trade_owner_id"}), on="team_id",
-                        how="left")  # fmt: skip
+    kept = pick_owners[pick_owners.team_id == pick_owners.owner_id].set_index("team_id").prob
+    order["p_kept"] = order.team_id.map(kept).fillna(0.0)
+    order["pick_note"] = order.team_id.map(notes).fillna("")
     order["abbrev"] = order.team_id.map(abbrev)
+    draws = pd.DataFrame({"draw": np.repeat(np.arange(DRAWS + 1), len(teams)),
+                          "slot": draw_slots.ravel(), "team_id": np.tile(teams, DRAWS + 1),
+                          "owner_id": draw_own.ravel()})  # fmt: skip
+    draws = draws.sort_values(["draw", "slot"]).reset_index(drop=True)
     order["season"] = nba_now
     order = order.sort_values("seed").reset_index(drop=True)
     probs = pd.DataFrame([(t, k + 1, float(sim["probs"][i, k])) for i, t in enumerate(teams)
@@ -766,6 +879,8 @@ def run(con: duckdb.DuckDBPyConnection, data_dir: Path) -> dict:
         "linked_name": int((links.how == "name").sum()),
         "train_rows": len(train_rows), "sims": SIMS, "hca": hca,
         "trades": len(trades),
+        "picks_moving": int((order.p_kept < 0.995).sum()),
+        "trades_source": trades_source(data_dir / TRADES_FILE) if len(trades) else "",
         "test_drafts": f"{int(done.draft.min())}-{int(done.draft.max())}" if len(done) else "",
         "first_round_rotation": (float((first.war >= TIERS["rotation"]).mean())
                                  if len(first) else None),
@@ -783,7 +898,8 @@ def run(con: duckdb.DuckDBPyConnection, data_dir: Path) -> dict:
     tables = {
         "outcomes": out, "eval": ev_df, "history": hist[[c for c in keep_hist if c in hist]],
         "prospects": prospects, "prospect_seasons": pseasons, "comps": cmp, "order": order,
-        "order_probs": probs, "fit": fit_long, "mock": m, "lottery": lot, "info": info,
+        "order_probs": probs, "pick_owners": pick_owners, "draws": draws, "fit": fit_long,
+        "mock": m, "lottery": lot, "info": info,
     }  # fmt: skip
     for name, df in tables.items():
         con.register("_d", df)

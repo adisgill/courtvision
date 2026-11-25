@@ -41,6 +41,8 @@ ATTRIBUTION = {
            "(stats.nba.com via nba_api; the NBA's injury report PDFs).",
     "bbref": "Player contracts and head coaches: Basketball-Reference.com.",
     "barttorvik": "College player seasons (2007-08 on) for the draft: Barttorvik.com (T-Rank).",
+    "picks": "Traded draft picks and their protections: Hoops Rumors' traded first-round pick "
+             "lists (which credit RealGM), entered by hand.",
 }  # fmt: skip
 
 

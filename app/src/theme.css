@@ -717,3 +717,12 @@ table.heat td { transition: none; }
 .mockpick { display: flex; gap: 0.75rem; align-items: flex-start; background: var(--surface); padding: 0.6rem 0.75rem; }
 .mockpick .pickno { font-size: 1.35rem; font-weight: 700; min-width: 2ch; text-align: right; color: var(--muted); line-height: 1.2; }
 .mockpick:nth-child(-n + 4) .pickno { color: var(--text); }
+.tradelist { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 0.9rem 1.5rem; margin-bottom: 0.75rem; }
+.traderow { display: grid; gap: 0.3rem; min-width: 0; }
+.traderow .note { line-height: 1.35; }
+.splitbar { display: flex; gap: 2px; height: 12px; }
+.splitbar span { display: block; min-width: 4px; height: 100%; }
+.splitbar span:first-child { border-radius: 4px 0 0 4px; }
+.splitbar span:last-child { border-radius: 0 4px 4px 0; }
+.splitbar span:only-child { border-radius: 4px; }
+@media (max-width: 760px) { .tradelist { grid-template-columns: minmax(0, 1fr); } }

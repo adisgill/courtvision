@@ -1,0 +1,20 @@
+# Traded first-round picks for courtvision's draft (copy to data/draft_pick_trades.csv).
+# Rules apply top to bottom; kinds and syntax are documented in courtvision.draft.read_trades.
+# A "# source:" line is shown on the site's draft order.
+# source: Hoops Rumors' list of traded 2027 first-round picks (which credits RealGM), read Nov. 25, 2026; Wikipedia's 2026-27 transactions list shows no 2027 first traded since.
+year,round,original,owner,protected_through,kind,note
+2027,1,NYK,BKN,,convey,New York's pick goes to Brooklyn unprotected.
+2027,1,BKN,HOU,,swap,Houston can swap its own pick for Brooklyn's.
+2027,1,PHX,HOU,,convey,Phoenix's pick goes to Houston unprotected.
+2027,1,ATL,SAS,,convey,Atlanta's pick goes to San Antonio unprotected.
+2027,1,MIA,CHA,14,convey,Miami's pick goes to Charlotte if it lands 15-30 (else Miami's 2028 first).
+2027,1,DAL,CHA,2,convey,Dallas's pick goes to Charlotte if it lands 3-30.
+2027,1,LAL,MEM,4,convey,The Lakers' pick goes to Memphis if it lands 5-30.
+2027,1,SAS,SAC,,convey,San Antonio's pick goes to Sacramento if it lands 1-16 and to Oklahoma City if 17-30.
+2027,1,SAS,OKC,16,convey,
+2027,1,CLE MIN UTA:5,MEM UTA PHX,,pool,"Of Cleveland's, Minnesota's and Utah's picks: the best to Memphis, the next to Utah, the worst to Phoenix; Utah keeps its own if it lands 1-5."
+2027,1,NOP MIL,NOP $nm,,pool,"New Orleans takes the better of its own and Milwaukee's picks and Atlanta the other, unless both land 1-4: then New Orleans keeps both."
+2027,1,$nm,ATL,4,convey,
+2027,1,$nm,NOP,,convey,
+2027,1,OKC LAC DEN:5>OKC,OKC OKC $ct,,pool,"Oklahoma City takes the two best of its own, the Clippers' and Denver's picks (if Denver's lands 1-5, Denver keeps it and OKC takes the better of the other two); the Clippers take the better of the one left and Toronto's, Toronto the other."
+2027,1,$ct TOR,LAC TOR,,pool,"Oklahoma City takes the two best of its own, the Clippers' and Denver's picks (if Denver's lands 1-5, Denver keeps it and OKC takes the better of the other two); the Clippers take the better of the one left and Toronto's, Toronto the other."

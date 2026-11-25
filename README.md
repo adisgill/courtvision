@@ -57,7 +57,7 @@ live mode.)
   r ≈ 0), a lineup's own plus-minus predicts its future worse than assuming league
   average, and coach-vs-coach history and positional matchups add nothing out of sample.
   Each is in [`docs/validation.md`](docs/validation.md).
-- **Reproducible:** `courtvision build` rebuilds everything from the raw caches; 171 Python tests and the web app's own.
+- **Reproducible:** `courtvision build` rebuilds everything from the raw caches; 177 Python tests and the web app's own.
 
 **Stack:** Python 3.12 · DuckDB + Parquet · pandas · uv · pytest · ruff · web app: React + TypeScript, DuckDB-WASM, Observable Plot (Streamlit + Plotly locally)
 
@@ -153,8 +153,9 @@ league that season.
    game. Read with the standard library; no PDF dependency.
 7. **You** — optional `data/salary_overrides.csv` to correct or add any deal
    (format: [`docs/salary_overrides.example.csv`](docs/salary_overrides.example.csv)), and
-   `data/draft_pick_trades.csv` for traded draft picks (year, round, original, owner,
-   protected_through, kind `convey` or `swap`, note).
+   `data/draft_pick_trades.csv` for traded draft picks: protections, swaps and "most
+   favorable of" pools (format and the 2027 picks, from Hoops Rumors' traded-pick list:
+   [`docs/draft_pick_trades.example.csv`](docs/draft_pick_trades.example.csv)).
 
 8. **[SportVU tracking logs, 2015-16](https://github.com/linouk23/NBA-Player-Movements)**
    (636 games from the first half of the season, which NBA.com briefly published in 2016;

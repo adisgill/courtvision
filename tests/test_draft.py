@@ -5,6 +5,7 @@ from __future__ import annotations
 import gzip
 import math
 from datetime import date
+from pathlib import Path
 
 import duckdb
 import numpy as np
@@ -97,18 +98,102 @@ def test_lottery_odds_and_order():
     assert sorted(one) == list(range(14)) and list(rest) == sorted(rest)  # the rest by seed
 
 
-def test_owners_apply_protection_and_swaps():
-    teams = [1, 2, 3]
-    slots = np.array([[1, 2, 3], [3, 1, 2]])  # sims x teams
-    abbrev = {1: "AAA", 2: "BBB", 3: "CCC"}
-    trades = pd.DataFrame({"original": ["AAA", "BBB"], "owner": ["CCC", "CCC"],
-                           "protected_through": [1, np.nan], "kind": ["convey", "swap"],
-                           "note": ["", ""]})  # fmt: skip
-    own, conv = draft.owners(slots, teams, abbrev, trades)
-    assert own[0, 0] == 1 and own[1, 0] == 3  # AAA keeps a #1 pick, conveys a #3
-    assert own[1, 1] == 3 and own[1, 2] == 2  # BBB's #1 beats CCC's #2: CCC swaps into it
-    assert own[0, 1] == 3 and own[0, 2] == 2  # sim 0: BBB's #2 beats CCC's #3 too
-    assert set(conv.kind) == {"convey", "swap"}
+def _rules(*rows):
+    t = pd.DataFrame(rows, columns=["original", "owner", "protected_through", "kind"])
+    t["note"] = ""
+    known = {x for r in rows for x in f"{r[0]} {r[1]}".replace(">", " ").split()
+             if not x.startswith("$") and ":" not in x}  # fmt: skip
+    known |= {x.split(":")[0] for r in rows for x in r[0].split()}
+    return draft.parse_rules(t, known - {""})
+
+
+def _slots(order: str) -> dict[str, int]:
+    return {t: k for k, t in enumerate(order.split(), 1)}
+
+
+def test_convey_protection_can_send_the_protected_pick_elsewhere():
+    rules = _rules(("SAS", "SAC", None, "convey"), ("SAS", "OKC", 16, "convey"),
+                   ("SAC", "OKC", None, "convey"))  # fmt: skip
+    for k, want in ((16, "SAC"), (17, "OKC")):
+        others = [f"T{i}" for i in range(1, 20)]
+        order = others[: k - 1] + ["SAS"] + others[k - 1 :] + ["SAC", "OKC"]
+        assert draft.resolve(_slots(" ".join(order)), rules)["SAS"] == want
+    # a later rule moves only the pick it names: SAC's own pick, not the one it got from SAS
+    got = draft.resolve(_slots("SAS SAC OKC"), rules)
+    assert got == {"SAS": "SAC", "SAC": "OKC", "OKC": "OKC"}
+
+
+def test_swap_trades_places_only_when_the_original_pick_is_better():
+    rules = _rules(("NYK", "BKN", None, "convey"), ("BKN", "HOU", None, "swap"))
+    assert draft.resolve(_slots("BKN NYK HOU"), rules) == {"BKN": "HOU", "NYK": "BKN",
+                                                           "HOU": "BKN"}  # fmt: skip
+    assert draft.resolve(_slots("HOU BKN NYK"), rules) == {"BKN": "BKN", "NYK": "BKN",
+                                                           "HOU": "HOU"}  # fmt: skip
+
+
+def test_pool_hands_out_by_favorability_and_a_protected_pick_stays_home():
+    rules = _rules(("CLE MIN UTA:5", "MEM UTA PHX", None, "pool"))
+    got = draft.resolve(_slots("X1 X2 X3 X4 X5 MIN UTA CLE"), rules)
+    assert got["MIN"] == "MEM" and got["UTA"] == "UTA" and got["CLE"] == "PHX"
+    got = draft.resolve(_slots("UTA CLE MIN"), rules)  # Utah #1: protected, keeps it
+    assert got == {"UTA": "UTA", "CLE": "MEM", "MIN": "PHX"}
+
+
+def test_placeholders_chain_pools_and_named_drops():
+    rules = _rules(("OKC LAC DEN:5>OKC", "OKC OKC $ct", None, "pool"),
+                   ("$ct TOR", "LAC TOR", None, "pool"))  # fmt: skip
+    pad = "X1 X2 X3 X4 X5 "
+    got = draft.resolve(_slots(pad + "DEN OKC LAC TOR"), rules)  # LAC's left over, beats TOR's
+    assert got == {"DEN": "OKC", "OKC": "OKC", "LAC": "LAC", "TOR": "TOR",
+                   **{f"X{i}": f"X{i}" for i in range(1, 6)}}  # fmt: skip
+    got = draft.resolve(_slots(pad + "TOR LAC DEN OKC"), rules)  # TOR's beats the leftover
+    assert got["TOR"] == "LAC" and got["OKC"] == "TOR" and got["LAC"] == got["DEN"] == "OKC"
+    got = draft.resolve(_slots("DEN OKC TOR LAC"), rules)  # Denver #1: protected, OKC gets one
+    assert got == {"DEN": "DEN", "OKC": "OKC", "TOR": "LAC", "LAC": "TOR"}
+
+
+def test_placeholder_convey_covers_both_top_four():
+    rules = _rules(("NOP MIL", "NOP $nm", None, "pool"), ("$nm", "ATL", 4, "convey"),
+                   ("$nm", "NOP", None, "convey"))  # fmt: skip
+    assert draft.resolve(_slots("MIL X NOP ATL"), rules) == {"MIL": "NOP", "NOP": "NOP",
+                                                             "X": "X", "ATL": "ATL"}  # fmt: skip
+    got = draft.resolve(_slots("X1 X2 X3 X4 NOP MIL ATL"), rules)
+    assert got["NOP"] == "NOP" and got["MIL"] == "ATL"
+
+
+def test_owners_give_each_pick_a_distribution_and_its_notes():
+    teams, abbrev = [1, 2, 3], {1: "AAA", 2: "BBB", 3: "CCC"}
+    trades = pd.DataFrame({"original": ["AAA"], "owner": ["CCC"], "protected_through": [1],
+                           "kind": ["convey"], "note": ["top-1 protected"]})  # fmt: skip
+    slots = np.array([[1, 2, 3], [3, 1, 2], [2, 3, 1], [2, 1, 3]])
+    own, dist, notes = draft.owners(slots, teams, abbrev, trades)
+    assert own[:, 0].tolist() == [1, 3, 3, 3]
+    d = dist.set_index(["team_id", "owner_id"]).prob
+    assert d[(1, 3)] == 0.75 and d[(1, 1)] == 0.25 and d[(2, 2)] == 1.0
+    assert notes == {1: "top-1 protected"}
+
+
+def test_the_example_trades_file_resolves_every_pick_to_one_real_team():
+    path = Path(__file__).parents[1] / "docs" / "draft_pick_trades.example.csv"
+    t = draft.read_trades(path, 2027)
+    teams = sorted(
+        {
+            x.split(":")[0].split(">")[0]
+            for c in ("original", "owner")
+            for v in t[c]
+            for x in v.split()
+            if not x.startswith("$")
+        }
+        | {"BOS", "CHI", "GSW"}
+    )
+    rules = draft.parse_rules(t, set(teams))
+    assert len(rules) == len(t)
+    rng = np.random.default_rng(5)
+    for _ in range(200):
+        got = draft.resolve(dict(zip(teams, rng.permutation(len(teams)) + 1, strict=True)), rules)
+        assert set(got) == set(teams) and set(got.values()) <= set(teams)
+        assert got["NYK"] == "BKN" and got["ATL"] == "SAS" and got["PHX"] == "HOU"
+        assert sum(v == "OKC" for v in got.values()) <= 4
 
 
 def test_mock_takes_value_and_lets_fit_decide_close_calls():
@@ -129,12 +214,16 @@ def test_team_fit_averages_strengths_over_needs():
 def test_read_trades_skips_blank_rows_and_other_years(tmp_path):
     p = tmp_path / "t.csv"
     p.write_text(
+        "# a comment line\n# source: a tracker, read today\n"
         "year,round,original,owner,protected_through,kind,note\n"
-        "2027,1,AAA,BBB,4,,top-4 protected\n2028,1,AAA,BBB,,,\n,,,,,,\n",
+        "2027,1,AAA,BBB,4,,top-4 protected\n# another\n2028,1,AAA,BBB,,,\n,,,,,,\n"
+        "2027,1,AAA CCC,BBB CCC,,Pool,\n",
         encoding="utf-8",
     )
     t = draft.read_trades(p, 2027)
-    assert len(t) == 1 and t.iloc[0].protected_through == 4 and t.iloc[0].kind == "convey"
+    assert len(t) == 2 and t.iloc[0].protected_through == 4 and t.iloc[0].kind == "convey"
+    assert t.iloc[1].kind == "pool" and t.iloc[1].note == ""
+    assert draft.trades_source(p) == "a tracker, read today"
     assert draft.read_trades(tmp_path / "missing.csv", 2027).empty
 
 

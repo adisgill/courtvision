@@ -5,7 +5,7 @@ import { useMemo } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Row, useQuery } from "../db";
 import { fmt, seasonLabel } from "../lib/format";
-import { DIMS, FEATURE_LABEL, TIER_LABEL, height, pct1 } from "../lib/draft";
+import { DIMS, FEATURE_LABEL, TIER_LABEL, height, pct1, possessive } from "../lib/draft";
 import { useTeamNames } from "../lib/nba";
 import { DivBars } from "../ui/grids";
 import { Card, DataTable, Empty, Loading, PageHead, ProbBar, Tile } from "../ui/kit";
@@ -25,14 +25,17 @@ function ProspectPage({ p }: { p: Row }) {
   const info = useQuery(`select draft_year, nba_season, fit_weight, first_round_rotation from draft.info`).rows[0];
   const comps = useQuery(`select * from draft.comps where pid = ${p.pid} order by rank`);
   const seasons = useQuery(`select * from draft.prospect_seasons where pid = ${p.pid} order by season`);
-  const fits = useQuery(`select f.team_id, f.fit, o.exp_pick, o.seed from draft.fit f join draft.order o using (team_id)
-                         where f.pid = ${p.pid} order by f.fit desc`);
+  // each pick under the team projected to own it (traded picks included)
+  const fits = useQuery(`select o.owner_id as team_id, o.team_id as original_id, f.fit, o.exp_pick, o.seed
+                         from draft.order o join draft.fit f on f.team_id = o.owner_id and f.pid = ${p.pid}
+                         order by f.fit desc, abs(o.exp_pick - ${Number(p.rank)})`);
   const teams = useQuery(`select * from market.teams`);
   const names = useTeamNames(Number(info?.nba_season ?? 2026));
   const teamRow = useMemo(() => new Map(teams.rows.map((r) => [Number(r.team_id), r])), [teams.rows]);
   const drivers = useMemo(() => { try { return JSON.parse(p.drivers ?? "[]") as { feature: string; push: number }[]; } catch { return []; } }, [p.drivers]);
   // teams likely to pick within reach of his board rank, by fit
-  const reach = fits.rows.filter((r) => Math.abs(Number(r.exp_pick) - Number(p.rank)) <= 6).slice(0, 5);
+  const reach = fits.rows.filter((r) => Math.abs(Number(r.exp_pick) - Number(p.rank)) <= 6)
+    .filter((r, i, all) => all.findIndex((x) => x.team_id === r.team_id) === i).slice(0, 5);
   return (
     <>
       <PageHead eyebrow={<><Link to="/draft">Draft</Link> · #{p.rank} on the board</>} title={p.player}
@@ -67,14 +70,15 @@ function ProspectPage({ p }: { p: Row }) {
           </Card>
         </div>
         <div className="c5">
-          <Card title="Teams in range he fits" sub="Teams projected to pick within six spots of his board rank, by how well his strengths answer their needs.">
+          <Card title="Teams in range he fits" sub="Teams projected to own a pick within six spots of his board rank, by how well his strengths answer their needs.">
             {reach.length ? reach.map((r) => {
               const label = Object.fromEntries(DIMS);
               const needs = ((teamRow.get(Number(r.team_id))?.needs ?? []) as string[]).map((d) => (label[d] ?? d).toLowerCase());
               return (
                 <div key={r.team_id} className="small" style={{ padding: "5px 0", borderBottom: "1px solid var(--rule)" }}>
                   <Link to={`/team/${r.team_id}`}><b>{names.get(Number(r.team_id))?.team ?? r.team_id}</b></Link>
-                  <span className="muted"> · expected pick {fmt.n(r.exp_pick, 1)}</span>
+                  <span className="muted"> · expected pick {fmt.n(r.exp_pick, 1)}{Number(r.original_id) !== Number(r.team_id)
+                    ? ` (${possessive(names.get(Number(r.original_id))?.team ?? "another team")})` : ""}</span>
                   <div className="xs ink2">fit {fmt.signed(r.fit, 2)}{needs.length ? ` · needs ${needs.join(", ")}` : " · no clear need"}</div>
                 </div>
               );
