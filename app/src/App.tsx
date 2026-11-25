@@ -21,6 +21,8 @@ const pages = {
   Plays: lazy(() => import("./pages/Plays")),
   Coaches: lazy(() => import("./pages/Coaches")),
   Market: lazy(() => import("./pages/Market")),
+  Draft: lazy(() => import("./pages/Draft")),
+  Prospect: lazy(() => import("./pages/Prospect")),
   Live: lazy(() => import("./pages/Live")),
   About: lazy(() => import("./pages/About")),
 };
@@ -39,6 +41,7 @@ export const NAV: { group: string; items: NavItem[] }[] = [
     { to: "/team", label: "Teams", icon: "team", desc: "Ratings, form, roster, shot profile and history" },
     { to: "/player", label: "Players", icon: "player", desc: "Ratings by game and season, impact and shot maps" },
     { to: "/lineups", label: "Lineups", icon: "compare", desc: "Five-man units and pairs, by net rating" },
+    { to: "/draft", label: "Draft", icon: "transfer", desc: "College prospects: big board, mock draft, the model's record" },
   ] },
   { group: "Analysis", items: [
     { to: "/plays", label: "Play types", icon: "plays", desc: "How teams score and defend, play by play" },
@@ -148,11 +151,14 @@ function Palette({ onClose }: { onClose: () => void }) {
       union all
       select 'player', person_id::varchar, player, from_year || '–' || to_year, 1 from web.player_names
       where player ilike ${like} and to_year >= 1996
+      union all
+      select 'prospect', pid::varchar, player, team || ' · #' || rank, 2 from draft.prospects
+      where player ilike ${like}
     ) order by o, length(name) limit 14` : null);
   const pagesHit = NAV.flatMap((g) => g.items).filter((i) => term && i.label.toLowerCase().includes(term.toLowerCase()));
   const items = [
     ...pagesHit.map((p) => ({ label: p.label, sub: "page", to: p.to })),
-    ...res.rows.map((r) => ({ label: r.name, sub: r.kind === "team" ? `team · ${r.sub ?? ""}` : `player · ${r.sub ?? ""}`,
+    ...res.rows.map((r) => ({ label: r.name, sub: `${r.kind} · ${r.sub ?? ""}`,
                               to: `/${r.kind}/${encodeURIComponent(r.id)}` })),
   ];
   const go = (to: string) => { nav(to); onClose(); };
@@ -233,6 +239,8 @@ export default function App() {
               <Route path="/plays" element={<pages.Plays />} />
               <Route path="/coaches" element={<pages.Coaches />} />
               <Route path="/market" element={<pages.Market />} />
+              <Route path="/draft" element={<pages.Draft />} />
+              <Route path="/prospect/:pid" element={<pages.Prospect />} />
               <Route path="/live" element={<pages.Live />} />
               <Route path="/about" element={<pages.About />} />
               <Route path="*" element={<p>Page not found. <Link to="/">Home</Link></p>} />

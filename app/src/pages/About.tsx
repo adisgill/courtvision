@@ -30,6 +30,8 @@ export default function About() {
               <li><b>Impact</b>: adjusted plus-minus over play-by-play lineups, with last season's impact and a box-score model as starting points.</li>
               <li><b>Forecasts</b>: a two-stage model (team form, the roster's impact over expected minutes, rest), chosen in a walk-forward test over five seasons where every game was predicted from earlier games only.</li>
               <li><b>The ledger</b>: every forecast is appended, never rewritten, and each game is graded on the last prediction logged before tip-off. See the <Link to="/scorecard">scorecard</Link>.</li>
+              <li><b>The draft</b>: every college player since 2007-08 linked to the NBA career that followed, a model of a player's first four NBA seasons from his college numbers,
+                tested on past drafts against the order teams actually picked in. See the <Link to="/draft?tab=record">track record</Link>.</li>
             </ul>
           </Card>
         </div>
